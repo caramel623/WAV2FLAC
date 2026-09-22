@@ -42,6 +42,9 @@ def _subdirs(path: str) -> List[str]:
 def _candidate_dirs() -> List[str]:
     dirs: List[str] = []
     app = _app_dir()
+    # 1) The app's own folder (allows shipping ffmpeg.exe next to the exe) and its bin subfolder
+    dirs.append(app)
+    dirs.append(os.path.join(app, "bin"))
     for base in (app, os.path.dirname(app)):
         for rel in ("ffmpeg/bin", "tools/ffmpeg/bin"):
             dirs.append(os.path.join(base, rel))
@@ -127,6 +130,14 @@ def get_ffmpeg_info(preferred_ffmpeg: str = "",
 
     if preferred_ffprobe and os.path.isfile(preferred_ffprobe):
         probe = preferred_ffprobe
+    elif ffmpeg and source == "manual":
+        # 手動指定 ffmpeg 時,優先採用同資料夾的 ffprobe.exe
+        same_dir = os.path.dirname(ffmpeg)
+        cand = os.path.join(same_dir, "ffprobe.exe")
+        if not os.path.isfile(cand):
+            cand = os.path.join(same_dir, "FFprobe.exe")
+        if os.path.isfile(cand):
+            probe = cand
     if not probe:
         probe = shutil.which("ffprobe")
     if not probe:
