@@ -8,6 +8,9 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 
+FFMPEG_DL_URL = "https://www.gyan.dev/ffmpeg/builds/"
+
+
 @dataclass
 class FFmpegInfo:
     found: bool

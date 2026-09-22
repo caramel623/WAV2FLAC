@@ -27,6 +27,14 @@ class Settings:
     overwrite_policy: str = "skip"
     # Logging
     log_dir: str = ""
+    # 模式: "manual" | "dlsite"
+    mode: str = "manual"
+    # DLsite 模式輸入(最上層資料夾/壓縮檔,可多個;以 ; 分隔)
+    dlsite_input: str = ""
+    # DL 模式自動清除 MP3 等低損檔(丟回收桶)
+    trash_mp3: bool = False
+    # DL 模式輸出子資料夾名稱(留空 = 使用格式名 FLAC/M4A)
+    dlsite_output_sub: str = ""
 
     @staticmethod
     def load(path: str = DEFAULT_SETTINGS_PATH) -> "Settings":

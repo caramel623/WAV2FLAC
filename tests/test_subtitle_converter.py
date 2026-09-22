@@ -5,8 +5,31 @@ from app.subtitle_converter import (
     cues_to_lrc,
     cues_to_unsynced,
     format_lrc_time,
+    parse_lrc_text,
     parse_vtt_text,
 )
+
+
+class TestParseLrc(unittest.TestCase):
+    def test_basic_times(self):
+        lrc = "[00:00.00]第一句\n[00:01.50]第二句\n"
+        cues = parse_lrc_text(lrc)
+        self.assertEqual(len(cues), 2)
+        self.assertEqual(cues[0].start_ms, 0)
+        self.assertEqual(cues[0].text, "第一句")
+        self.assertEqual(cues[1].start_ms, 1500)
+        # end 被下一段覆蓋
+        self.assertEqual(cues[0].end_ms, 1500)
+
+    def test_centiseconds_two_digits(self):
+        cues = parse_lrc_text("[01:02.30]x\n")
+        self.assertEqual(cues[0].start_ms, 62300)
+
+    def test_metadata_only_ignored(self):
+        lrc = "[ar:歌手]\n[ti:歌名]\n[00:01.00]歌詞\n"
+        cues = parse_lrc_text(lrc)
+        self.assertEqual(len(cues), 1)
+        self.assertEqual(cues[0].text, "歌詞")
 
 
 class TestDecodeBytes(unittest.TestCase):

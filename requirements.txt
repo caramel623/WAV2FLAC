@@ -1,2 +1,6 @@
 PySide6>=6.6
 mutagen>=1.47
+
+# 選填:支援 7Z / RAR 壓縮檔解開(不裝則 DLsite 模式僅支援 ZIP)
+# py7zr>=0.21
+# rarfile>=4.0

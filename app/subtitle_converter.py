@@ -150,6 +150,45 @@ def parse_vtt(path: str) -> List[VttCue]:
     return parse_vtt_text(read_vtt(path))
 
 
+_LRC_TIME_RE = re.compile(r"\[(\d{1,2}):(\d{1,2})(?:[.:](\d{1,3}))?\]")
+
+
+def parse_lrc_text(text: str) -> List[VttCue]:
+    """把 LRC 轉成 cue(start=該段时间戳;end 預設 +1s,會被下一段时间戳覆蓋)。"""
+    cues: List[VttCue] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        times = _LRC_TIME_RE.findall(line)
+        if not times:
+            continue
+        text_part = _LRC_TIME_RE.sub("", line).strip()
+        for tm in times:
+            frac = tm[2] or "0"
+            # LRC 小數為「厘秒」(2 位);3 位則視為毫秒
+            ms_frac = int(frac) * 10 if len(frac) < 3 else int(frac[:3])
+            base_ms = (int(tm[0]) * 60 + int(tm[1])) * 1000
+            start = base_ms + ms_frac
+            cues.append(VttCue(start_ms=start, end_ms=start + 1000, text=text_part))
+    # 以「下一段開始時間」修正 end
+    for i in range(len(cues) - 1):
+        if cues[i + 1].start_ms > cues[i].start_ms:
+            cues[i].end_ms = cues[i + 1].start_ms
+    return cues
+
+
+def parse_lrc(path: str) -> List[VttCue]:
+    return parse_lrc_text(read_vtt(path))
+
+
+def parse_subtitle(path: str) -> List[VttCue]:
+    """依副檔名自動選擇 VTT 或 LRC 解析。"""
+    if path.lower().endswith(".lrc"):
+        return parse_lrc(path)
+    return parse_vtt(path)
+
+
 def format_lrc_time(ms: int) -> str:
     # [mm:ss.cc] centiseconds
     total_cs = int(round(ms / 10))

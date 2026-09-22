@@ -8,13 +8,15 @@ from PySide6.QtWidgets import (
     QApplication, QFileDialog, QFormLayout, QGridLayout, QGroupBox, QHBoxLayout,
     QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox, QComboBox,
     QProgressBar, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem,
-    QTextEdit, QCheckBox, QWidget, QAbstractItemView, QSizePolicy,
+    QTextEdit, QCheckBox, QWidget, QAbstractItemView, QSizePolicy, QRadioButton,
 )
 
-from . import __version__
+from . import __version__, dlsite as dlsite_mod
 from .file_matcher import MediaPair, PairStatus, scan_paths
-from .ffmpeg_manager import get_ffmpeg_info
+from .ffmpeg_manager import get_ffmpeg_info, FFMPEG_DL_URL
 from .settings import Settings
+from .settings_dialog import open_settings
+from .trash import send_to_trash
 from .workers import BatchWorker, ConversionConfig, JobItem
 
 _STATUS_TEXT = {
@@ -23,8 +25,6 @@ _STATUS_TEXT = {
     PairStatus.MISSING_AUDIO: "缺少音訊",
     PairStatus.SKIPPED: "略過",
 }
-
-FFMPEG_DL_URL = "https://www.gyan.dev/ffmpeg/builds/"
 
 
 class MainWindow(QMainWindow):
@@ -62,6 +62,23 @@ class MainWindow(QMainWindow):
         box = QGroupBox("來源")
         form = QFormLayout(box)
 
+        # 模式切換
+        mode_row = QHBoxLayout()
+        self.mode_manual = QRadioButton("手動配對")
+        self.mode_dlsite = QRadioButton("DLsite 模式")
+        self._mode_init = True
+        self.mode_manual.toggled.connect(self._on_mode_changed)
+        if self.settings.mode == "dlsite":
+            self.mode_dlsite.setChecked(True)
+        else:
+            self.mode_manual.setChecked(True)
+        self._mode_init = False
+        mode_row.addWidget(self.mode_manual)
+        mode_row.addWidget(self.mode_dlsite)
+        mode_row.addStretch(1)
+        form.addRow("模式", mode_row)
+
+        # 手動模式:音訊
         self.audio_edit = QLineEdit(self.settings.source_audio)
         self.audio_edit.setReadOnly(True)
         b_audio = QPushButton("新增...")
@@ -70,7 +87,9 @@ class MainWindow(QMainWindow):
         row_a.addWidget(self.audio_edit, 1)
         row_a.addWidget(b_audio)
         form.addRow("音訊 (WAV 資料夾或檔案)", row_a)
+        self.audio_row = form.rowCount() - 1
 
+        # 手動模式:字幕
         self.sub_edit = QLineEdit(self.settings.source_subtitle)
         self.sub_edit.setReadOnly(True)
         b_sub = QPushButton("新增...")
@@ -78,20 +97,60 @@ class MainWindow(QMainWindow):
         row_s = QHBoxLayout()
         row_s.addWidget(self.sub_edit, 1)
         row_s.addWidget(b_sub)
-        form.addRow("字幕 (VTT 資料夾或檔案)", row_s)
+        form.addRow("字幕 (VTT/LRC 資料夾或檔案)", row_s)
+        self.sub_row = form.rowCount() - 1
 
+        # DLsite 模式:最上層資料夾/壓縮檔
+        self.dl_edit = QLineEdit(self.settings.dlsite_input)
+        self.dl_edit.setReadOnly(True)
+        b_dl = QPushButton("新增...")
+        b_dl.clicked.connect(self._choose_dlsite)
+        row_d = QHBoxLayout()
+        row_d.addWidget(self.dl_edit, 1)
+        row_d.addWidget(b_dl)
+        form.addRow("DLsite (最上層資料夾/壓縮檔)", row_d)
+        self.dl_row = form.rowCount() - 1
+
+        # 輸出(僅手動模式)
         self.out_edit = QLineEdit(self.settings.output_dir)
         b_out = QPushButton("選取...")
         b_out.clicked.connect(self._choose_output)
         row_o = QHBoxLayout()
         row_o.addWidget(self.out_edit, 1)
         row_o.addWidget(b_out)
-        form.addRow("輸出資料夾", row_o)
+        form.addRow("輸出資料夾(手動模式)", row_o)
+        self.out_row = form.rowCount() - 1
+        self._source_form = form
 
+        # 掃描 + 設定
+        btn_row = QHBoxLayout()
         self.scan_btn = QPushButton("掃描並配對")
         self.scan_btn.clicked.connect(self._scan)
-        form.addRow(self.scan_btn)
+        self.settings_btn = QPushButton("設定…")
+        self.settings_btn.clicked.connect(self._open_settings)
+        btn_row.addWidget(self.scan_btn, 1)
+        btn_row.addWidget(self.settings_btn)
+        form.addRow(btn_row)
+
+        self._dlsite_scan = dlsite_mod.DlSiteScan()
+        self._apply_mode_visibility()
         return box
+
+    def _open_settings(self) -> None:
+        if open_settings(self.settings, self):
+            self._refresh_ffmpeg()
+
+    def _on_mode_changed(self, _checked: bool = False) -> None:
+        if getattr(self, "_mode_init", False):
+            return
+        self._apply_mode_visibility()
+
+    def _apply_mode_visibility(self) -> None:
+        dl = self.mode_dlsite.isChecked()
+        self._source_form.setRowVisible(self.audio_row, not dl)
+        self._source_form.setRowVisible(self.sub_row, not dl)
+        self._source_form.setRowVisible(self.out_row, not dl)
+        self._source_form.setRowVisible(self.dl_row, dl)
 
     def _build_settings_group(self) -> QGroupBox:
         box = QGroupBox("轉碼設定")
@@ -197,6 +256,8 @@ class MainWindow(QMainWindow):
         self.settings.source_audio = self.audio_edit.text()
         self.settings.source_subtitle = self.sub_edit.text()
         self.settings.output_dir = self.out_edit.text()
+        self.settings.dlsite_input = self.dl_edit.text()
+        self.settings.mode = "dlsite" if self.mode_dlsite.isChecked() else "manual"
         self.settings.convert_to = self.convert_combo.currentData()
         self.settings.aac_bitrate = self.aac_bitrate.currentText()
         self.settings.flac_compression = self.flac_comp.value()
@@ -206,6 +267,20 @@ class MainWindow(QMainWindow):
         self.settings.save()
 
     # ----------------------------------------------------------- slots
+    def _choose_dlsite(self) -> None:
+        base = self.dl_edit.text()
+        # 先嘗試選壓縮檔
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "選擇 DLsite 商品壓縮檔(.zip/.7z/.rar)", base,
+            "壓縮檔 (*.zip *.7z *.rar);;所有檔案 (*)")
+        if not files:
+            # 退回選資料夾
+            d = QFileDialog.getExistingDirectory(self, "選擇 DLsite 商品最上層資料夾", base)
+            files = [d] if d else []
+        chosen = [p for p in files if p and p != base]
+        merged = ([base] if base else []) + chosen
+        self.dl_edit.setText(os.pathsep.join(merged))
+
     def _choose_audio(self) -> None:
         d = QFileDialog.getExistingDirectory(self, "選擇音訊資料夾", self.audio_edit.text())
         if d:
@@ -229,6 +304,12 @@ class MainWindow(QMainWindow):
             self._refresh_ffmpeg()
 
     def _scan(self) -> None:
+        if self.mode_dlsite.isChecked():
+            self._scan_dlsite()
+        else:
+            self._scan_manual()
+
+    def _scan_manual(self) -> None:
         audio_src = [s for s in self.audio_edit.text().split(os.pathsep) if s]
         sub_src = [s for s in self.sub_edit.text().split(os.pathsep) if s]
         out = self.out_edit.text()
@@ -236,6 +317,46 @@ class MainWindow(QMainWindow):
         self._populate_table()
         matched = sum(1 for p in self.pairs if p.status == PairStatus.MATCHED)
         self.statusBar().showMessage(f"掃描完成:共 {len(self.pairs)} 筆,已配對 {matched} 筆")
+
+    def _scan_dlsite(self) -> None:
+        inputs = [s for s in self.dl_edit.text().split(os.pathsep) if s]
+        if not inputs:
+            QMessageBox.warning(self, "WAV2FLAC", "請先加入 DLsite 商品最上層資料夾或壓縮檔。")
+            return
+        self._append_log(f"▶ 掃描 DLsite:{len(inputs)} 個來源")
+        scan = dlsite_mod.scan_dlsite(inputs)
+        self._dlsite_scan = scan
+
+        # 依商品最上層決定輸出子資料夾(商品/FLAC 或 商品/M4A)
+        sub = self.settings.dlsite_output_sub.strip() or self.convert_combo.currentData().upper()
+        for pair in scan.pairs:
+            base = pair.audio_path or pair.subtitle_path or ""
+            top = dlsite_mod.product_top(base)
+            if top:
+                pair.output_dir = os.path.join(top, sub)
+
+        # MP3 清除對照表(音訊檔名 → 同檔名之 MP3 等低損檔)
+        trash_map: dict = {}
+        if self.settings.trash_mp3:
+            mp3_by_stem: dict = {}
+            for mp3 in scan.trashable:
+                stem = dlsite_mod._norm_stem(os.path.splitext(os.path.basename(mp3))[0])
+                mp3_by_stem.setdefault(stem, []).append(mp3)
+            for pair in scan.pairs:
+                if not pair.audio_path:
+                    continue
+                stem = dlsite_mod._norm_stem(os.path.splitext(os.path.basename(pair.audio_path))[0])
+                if stem in mp3_by_stem:
+                    trash_map[os.path.basename(pair.audio_path)] = mp3_by_stem[stem]
+
+        self._dlsite_trash_map = trash_map
+        self.pairs = scan.pairs
+        self._populate_table()
+        matched = len(scan.matched)
+        self._append_log(f"    掃描到 {len(scan.pairs)} 筆(已配對 {matched}),"
+                         f"發現 {len(scan.trashable)} 個 MP3/低損檔"
+                         + (",將清除同檔名 MP3" if trash_map else ""))
+        self.statusBar().showMessage(f"DLsite 掃描完成:已配對 {matched} 筆")
 
     def _populate_table(self) -> None:
         self.table.setRowCount(0)
@@ -263,14 +384,15 @@ class MainWindow(QMainWindow):
                 f"找不到 FFmpeg。\n請至官方網站 {FFMPEG_DL_URL} 下載,或於下方「指定 ffmpeg.exe...」手動選取。",
             )
             return
-        if not self.out_edit.text():
+        in_dlsite = self.mode_dlsite.isChecked()
+        if not in_dlsite and not self.out_edit.text():
             QMessageBox.warning(self, "WAV2FLAC", "請先選擇輸出資料夾。")
             return
 
         jobs = [JobItem(pair=p, index=i, total=len(matched)) for i, p in enumerate(matched)]
         cfg = ConversionConfig(
             convert_to=self.convert_combo.currentData(),
-            output_dir=self.out_edit.text(),
+            output_dir="" if in_dlsite else self.out_edit.text(),
             overwrite_policy=self.policy_combo.currentData(),
             aac_bitrate=self.aac_bitrate.currentText(),
             flac_compression=self.flac_comp.value(),
@@ -278,6 +400,7 @@ class MainWindow(QMainWindow):
             embed_lyrics=self.embed_check.isChecked(),
             ffmpeg_path=info.ffmpeg_path,
             ffprobe_path=info.ffprobe_path,
+            trash_map=getattr(self, "_dlsite_trash_map", {}),
         )
         self.worker = BatchWorker(cfg, jobs)
         self.thread = QThread(self)
@@ -286,6 +409,7 @@ class MainWindow(QMainWindow):
         self.worker.progress.connect(self._on_progress)
         self.worker.item_finished.connect(self._on_item)
         self.worker.log.connect(self._append_log)
+        self.worker.dlsite_mp3s.connect(self._on_dlsite_mp3s)
         self.worker.finished.connect(self._on_finished)
         self.worker.finished.connect(self.thread.quit)
         self.thread.start()
@@ -311,6 +435,15 @@ class MainWindow(QMainWindow):
         elif result.status == "cancelled":
             self._append_log(f"↩ 已取消:{os.path.basename(result.audio or '')}")
 
+    def _on_dlsite_mp3s(self, paths: list) -> None:
+        if not self.settings.trash_mp3 or not paths:
+            return
+        ok, fail = send_to_trash(list(paths))
+        for p in list(paths)[:2]:
+            self._append_log(f"    ♻ 清除 MP3:{os.path.basename(p)}")
+        if len(paths) > 2:
+            self._append_log(f"    …共清除 {ok} 個 MP3" + (f"(失敗 {fail})" if fail else ""))
+
     def _on_finished(self, summary) -> None:
         if self.thread:
             self.thread.quit()
@@ -318,9 +451,11 @@ class MainWindow(QMainWindow):
             self.thread = None
             self.worker.deleteLater()
             self.worker = None
+        dlsite_mod.cleanup_cache()
         msg = f"完成:成功 {summary.success} 件、失敗 {summary.failed} 件、略過 {summary.skipped} 件"
         if summary.cancelled:
             msg += ",已取消"
+        self._append_log(f"\n✔ {msg}")
         self.progress.setFormat(msg)
         self.start_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
@@ -337,13 +472,27 @@ class MainWindow(QMainWindow):
             e.acceptProposedAction()
 
     def dropEvent(self, e) -> None:  # noqa: N802
+        if self.mode_dlsite.isChecked():
+            dl: List[str] = []
+            for url in e.mimeData().urls():
+                path = url.toLocalFile()
+                if os.path.isdir(path):
+                    dl.append(path)
+                elif dlsite_mod.archive.is_archive(path):
+                    dl.append(path)
+            if dl:
+                base = self.dl_edit.text()
+                self.dl_edit.setText((base + os.pathsep + os.pathsep.join(dl)).strip(os.pathsep))
+            self._scan_dlsite()
+            return
+
         audio: List[str] = []
         subs: List[str] = []
         for url in e.mimeData().urls():
             path = url.toLocalFile()
-            if path.endswith(".vtt"):
+            if path.lower().endswith(".vtt") or path.lower().endswith(".lrc"):
                 subs.append(path)
-            elif path.endswith(".wav"):
+            elif path.lower().endswith(".wav"):
                 audio.append(path)
             elif os.path.isdir(path):
                 audio.append(path)

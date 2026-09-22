@@ -3,14 +3,14 @@ from __future__ import annotations
 import os
 import threading
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from PySide6.QtCore import QObject, Signal, QThread
 
 from .audio_converter import convert_audio, verify_output
 from .file_matcher import MediaPair
 from .metadata_writer import apply_metadata, build_metadata_map, get_source_tags
-from .subtitle_converter import cues_to_lrc, cues_to_unsynced, parse_vtt
+from .subtitle_converter import cues_to_lrc, cues_to_unsynced, parse_subtitle
 
 
 @dataclass
@@ -24,6 +24,7 @@ class ConversionConfig:
     embed_lyrics: bool = True
     ffmpeg_path: str = ""
     ffprobe_path: str = ""
+    trash_map: Dict[str, List[str]] = field(default_factory=dict)
 
     @property
     def ext(self) -> str:
@@ -58,6 +59,7 @@ class BatchWorker(QObject):
     progress = Signal(int, int, str, float)  # done, total, current_stem, item_pct
     item_finished = Signal(object)       # ItemResult
     log = Signal(str)
+    dlsite_mp3s = Signal(list)           # 可清除的 MP3(成功後)
     finished = Signal(object)            # BatchSummary
 
     def __init__(self, config: ConversionConfig,
@@ -71,7 +73,8 @@ class BatchWorker(QObject):
         self._cancel.set()
 
     def _resolve_output(self, pair: MediaPair) -> tuple:
-        out_dir = self.config.output_dir or os.path.dirname(pair.audio_path or pair.subtitle_path or "")
+        out_dir = (pair.output_dir or self.config.output_dir
+                   or os.path.dirname(pair.audio_path or pair.subtitle_path or ""))
         stem = pair.stem
         base = f"{stem}.{self.config.ext}"
         out_path = os.path.join(out_dir, base)
@@ -149,21 +152,34 @@ class BatchWorker(QObject):
         if not ok:
             return ItemResult(pair.audio_path, "failed", message="ffmpeg error")
 
-        # 2) Parse VTT + write LRC
+        # 2) Parse subtitle + write LRC
         lrc_text = ""
         unsynced_text = ""
+        lrc_path = os.path.splitext(out_path)[0] + ".lrc"
         try:
-            self._log("    解析 VTT 字幕 …")
-            cues = parse_vtt(pair.subtitle_path)
-            lrc_text = cues_to_lrc(cues)
-            unsynced_text = cues_to_unsynced(cues)
-            lrc_path = os.path.splitext(out_path)[0] + ".lrc"
-            with open(lrc_path, "w", encoding="utf-8") as f:
-                f.write(lrc_text)
-            self._log(f"    已產生 LRC({len(cues)} 段)")
+            is_lrc_src = pair.subtitle_path.lower().endswith(".lrc")
+            if is_lrc_src:
+                # LRC 來源:直接複製(保留原標籤/順序),並解析 unsynced
+                import shutil
+                shutil.copyfile(pair.subtitle_path, lrc_path)
+                with open(pair.subtitle_path, "rb") as f:
+                    lrc_text = f.read().decode("utf-8", errors="replace")
+                unsynced_text = "\n".join(
+                    l.strip() for l in lrc_text.splitlines()
+                    if l.strip() and not l.strip().startswith("[")
+                )
+                self._log("    已複製 LRC(來源)")
+            else:
+                self._log("    解析 VTT 字幕 …")
+                cues = parse_subtitle(pair.subtitle_path)
+                lrc_text = cues_to_lrc(cues)
+                unsynced_text = cues_to_unsynced(cues)
+                with open(lrc_path, "w", encoding="utf-8") as f:
+                    f.write(lrc_text)
+                self._log(f"    已產生 LRC({len(cues)} 段)")
         except Exception as e:  # noqa: BLE001
-            self._log(f"    VTT 解析失敗:{e}")
-            return ItemResult(pair.audio_path, "failed", message=f"vtt error: {e}")
+            self._log(f"    字幕處理失敗:{e}")
+            return ItemResult(pair.audio_path, "failed", message=f"subtitle error: {e}")
 
         # 3) Metadata
         if self.config.embed_lyrics:
@@ -182,6 +198,9 @@ class BatchWorker(QObject):
             return ItemResult(pair.audio_path, "failed", message="output invalid")
         os.replace(tmp, out_path)
         self._log(f"    ✔ 完成 → {os.path.basename(out_path)}")
+        mp3s = self.config.trash_map.get(os.path.basename(pair.audio_path), [])
+        if mp3s:
+            self.dlsite_mp3s.emit(mp3s)
         return ItemResult(pair.audio_path, "success", output=out_path)
 
 
