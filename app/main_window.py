@@ -303,16 +303,12 @@ class MainWindow(QMainWindow):
         self.progress.setRange(0, total)
         self.progress.setValue(done)
         self.progress.setFormat(f"{done}/{total} - {stem}")
-    def _fmt_status_zh(self, s: str) -> str:
-        return {
-            "success": "成功",
-            "failed": "失敗",
-            "skipped": "略過",
-            "cancelled": "已取消",
-        }.get(s, s)
 
     def _on_item(self, result) -> None:
-        self._append_log(f"[{self._fmt_status_zh(result.status)}] {os.path.basename(result.audio or '')} {result.message}")
+        if result.status == "failed":
+            self._append_log(f"✘ {os.path.basename(result.audio or '')}:{result.message}")
+        elif result.status == "cancelled":
+            self._append_log(f"↩ 已取消:{os.path.basename(result.audio or '')}")
 
     def _on_finished(self, summary) -> None:
         if self.thread:
@@ -331,6 +327,8 @@ class MainWindow(QMainWindow):
 
     def _append_log(self, text: str) -> None:
         self.log_view.append(text)
+        sb = self.log_view.verticalScrollBar()
+        sb.setValue(sb.maximum())
 
     # --------------------------------------------------------- drag drop
     def dragEnterEvent(self, e) -> None:  # noqa: N802

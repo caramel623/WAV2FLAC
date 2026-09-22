@@ -101,7 +101,8 @@ def get_ffmpeg_version(ffmpeg_path: str) -> str:
     try:
         proc = subprocess.run(
             [ffmpeg_path, "-version"],
-            capture_output=True, text=True, shell=False, timeout=10,
+            capture_output=True, encoding="utf-8", errors="replace",
+            shell=False, timeout=10,
         )
         if proc.returncode == 0 and proc.stdout:
             return proc.stdout.strip().splitlines()[0]

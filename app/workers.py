@@ -105,27 +105,40 @@ class BatchWorker(QObject):
             self.progress.emit(done, summary.total, pair.stem)
         self.finished.emit(summary)
 
+    def _log(self, msg: str) -> None:
+        safe = str(msg)
+        self.log.emit(safe)
+
     def _process_one(self, job: JobItem) -> ItemResult:
         pair = job.pair
         if not pair.ready:
             return ItemResult(pair.audio_path, "skipped", message=(pair.note or "not matched"))
 
         out_path, action = self._resolve_output(pair)
+        idx = job.index
+        total = job.total
+        self._log(f"[{idx}/{total}] {pair.stem}")
+
         if action == "skip":
+            self._log(f"    略過(已存在):{os.path.basename(out_path)}")
             return ItemResult(pair.audio_path, "skipped", message="exists, policy=skip")
 
         out_dir = os.path.dirname(out_path)
         os.makedirs(out_dir, exist_ok=True)
 
-        # 1) Convert audio
+        # 1) Convert audio (即時進度写入 LOG)
         tmp = out_path + ".tmp"
+        self._log(f"    轉檔中 … {os.path.basename(pair.audio_path)} → {self.config.convert_to.upper()}")
         ok = convert_audio(
             self.config.ffmpeg_path, pair.audio_path, tmp,
             self.config.convert_to, self.config.aac_bitrate,
             self.config.flac_compression, self.config.target_sample_rate,
+            ffprobe_path=self.config.ffprobe_path,
+            log_callback=self._log,
             cancel_event=self._cancel,
         )
         if self._cancel.is_set():
+            self._log(f"    已取消 {pair.stem}")
             return ItemResult(pair.audio_path, "cancelled", message="cancelled")
         if not ok:
             return ItemResult(pair.audio_path, "failed", message="ffmpeg error")
@@ -134,17 +147,21 @@ class BatchWorker(QObject):
         lrc_text = ""
         unsynced_text = ""
         try:
+            self._log("    解析 VTT 字幕 …")
             cues = parse_vtt(pair.subtitle_path)
             lrc_text = cues_to_lrc(cues)
             unsynced_text = cues_to_unsynced(cues)
             lrc_path = os.path.splitext(out_path)[0] + ".lrc"
             with open(lrc_path, "w", encoding="utf-8") as f:
                 f.write(lrc_text)
+            self._log(f"    已產生 LRC({len(cues)} 段)")
         except Exception as e:  # noqa: BLE001
+            self._log(f"    VTT 解析失敗:{e}")
             return ItemResult(pair.audio_path, "failed", message=f"vtt error: {e}")
 
         # 3) Metadata
         if self.config.embed_lyrics:
+            self._log("    寫入金標與歌詞 …")
             source_tags = get_source_tags(tmp)
             meta = build_metadata_map(source_tags, lrc=lrc_text,
                                       unsynced=unsynced_text,
@@ -155,9 +172,10 @@ class BatchWorker(QObject):
         if not verify_output(tmp, self.config.ffprobe_path):
             if os.path.isfile(tmp):
                 os.remove(tmp)
+            self._log(f"    驗證失敗(輸出無效){pair.stem}")
             return ItemResult(pair.audio_path, "failed", message="output invalid")
         os.replace(tmp, out_path)
-        self.log.emit(f"完成:{pair.stem} -> {os.path.basename(out_path)}")
+        self._log(f"    ✔ 完成 → {os.path.basename(out_path)}")
         return ItemResult(pair.audio_path, "success", output=out_path)
 
 
