@@ -58,6 +58,19 @@ class TestScanPaths(unittest.TestCase):
         self.assertEqual(matched[0].stem, name)
         self.tmp.cleanup()
 
+    def test_double_extension_vtt_matches(self):
+        a, s = self._setup()
+        name = "2.深夜夜袭紧贴舔耳、心情代言＆洗脑手淫"
+        _mk(a, name + ".wav")
+        # VTT stem contains a trailing ".wav"
+        _mk(s, name + ".wav.vtt")
+        pairs = scan_paths([a], [s], "out")
+        matched = [p for p in pairs if p.status == PairStatus.MATCHED]
+        self.assertEqual(len(matched), 1)
+        self.assertEqual(matched[0].stem, name)
+        self.assertTrue(matched[0].ready)
+        self.tmp.cleanup()
+
     def test_single_files(self):
         tmp = tempfile.TemporaryDirectory()
         a = _mk(tmp.name, "x.wav")

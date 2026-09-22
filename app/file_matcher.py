@@ -35,6 +35,17 @@ class MediaPair:
 
 AUDIO_EXTS = {".wav"}
 SUBTITLE_EXTS = {".vtt"}
+_AUDIO_STEM_SUFFIXES = (".wav", ".flac", ".m4a", ".mp3", ".aac", ".ogg",
+                        ".wma", ".aiff", ".mp4", ".opus")
+
+
+def _norm_stem(stem: str) -> str:
+    """Strip a trailing audio extension so `x.wav.vtt` pairs with `x.wav`."""
+    s = stem.lower()
+    for suf in _AUDIO_STEM_SUFFIXES:
+        if s.endswith(suf) and len(stem) > len(suf):
+            return stem[: -len(suf)]
+    return stem
 
 
 def _ext(path: str) -> str:
@@ -54,10 +65,10 @@ def _collect(paths: List[str], exts: set, target: Dict[str, str]) -> None:
             for name in entries:
                 full = os.path.join(base, name)
                 if os.path.isfile(full) and _ext(full) in exts:
-                    stem = os.path.splitext(name)[0]
+                    stem = _norm_stem(os.path.splitext(name)[0])
                     target.setdefault(stem, full)
         elif os.path.isfile(base) and _ext(base) in exts:
-            stem = os.path.splitext(os.path.basename(base))[0]
+            stem = _norm_stem(os.path.splitext(os.path.basename(base))[0])
             target.setdefault(stem, base)
 
 

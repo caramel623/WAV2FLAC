@@ -1,11 +1,34 @@
 import unittest
 
 from app.subtitle_converter import (
+    _decode_bytes,
     cues_to_lrc,
     cues_to_unsynced,
     format_lrc_time,
     parse_vtt_text,
 )
+
+
+class TestDecodeBytes(unittest.TestCase):
+    def test_japanese_shift_jis(self):
+        text = "これは日本語の歌詞"
+        self.assertEqual(_decode_bytes(text.encode("cp932")), text)
+
+    def test_traditional_chinese_big5(self):
+        text = "這是繁體中文"
+        self.assertEqual(_decode_bytes(text.encode("big5")), text)
+
+    def test_simplified_gb18030(self):
+        text = "这是简体中文"
+        self.assertEqual(_decode_bytes(text.encode("gb18030")), text)
+
+    def test_english_digits_symbols(self):
+        text = "Hello 2024 Rock & Roll @#%!"
+        self.assertEqual(_decode_bytes(text.encode("utf-8")), text)
+
+    def test_utf8_bom(self):
+        text = "Hello"
+        self.assertEqual(_decode_bytes(b"\xef\xbb\xbf" + text.encode("utf-8")), text)
 
 
 class TestFormatLrcTime(unittest.TestCase):

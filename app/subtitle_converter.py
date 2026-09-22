@@ -84,13 +84,60 @@ def parse_vtt_text(text: str) -> List[VttCue]:
     return cues
 
 
+# Common characters used to score ambiguous CJK decodings (score by hits).
+_JA_COMMON = set(
+    "のにはをがこれそのためあっていないしからでとも"
+    "しいますれるわれるとなりおこないあるくへまで"
+    "いれんこうじんひとこえことばたちたなかやう"
+    "せなかまたらひふへほへぼまみむめもゆるりるれろわを"
+    "うんえりかきくけこしすせそうぞだぢでどばびぶべぼぱぴぷぺ"
+)
+_ZH_TRAD_COMMON = set(
+    "的一是不了人我在有他这为之大来以个中上们到说国和地"
+    "也子时道出会三要于自小的学年得就那好她多後間樣說對頭聲來"
+    "個麼裡還過沒裡進見請別樣話機聲響見題點讓聽覺問答讀寫"
+)
+_ZH_SIMP_COMMON = set(
+    "的一是不了人我在有他这为之大来以个中上们到说国和地"
+    "也子时道出会三要于自小的学年得就那好她多后间样说对头声来"
+    "个么里还过没里进见请别样话机声响见题点让听觉问答读写"
+)
+
+_ENC_COMMON = {
+    "cp932": _JA_COMMON,
+    "big5": _ZH_TRAD_COMMON,
+    "gb18030": _ZH_SIMP_COMMON,
+}
+
+
+def _score_encoding(data: bytes, enc: str) -> Optional[tuple]:
+    try:
+        text = data.decode(enc)
+    except UnicodeDecodeError:
+        return None
+    common = _ENC_COMMON[enc]
+    score = sum(1 for ch in text if ch in common)
+    if score == 0:
+        return None
+    return score, text
+
+
+def _cjk_fallback(data: bytes) -> str:
+    best = None
+    for enc in ("cp932", "big5", "gb18030"):
+        r = _score_encoding(data, enc)
+        if r and (best is None or r[0] > best[0]):
+            best = r
+    return best[1] if best else data.decode("utf-8", errors="replace")
+
+
 def _decode_bytes(data: bytes) -> str:
-    for enc in ("utf-8-sig", "utf-8", "big5", "cp950", "gbk", "latin-1"):
-        try:
-            return data.decode(enc)
-        except UnicodeDecodeError:
-            continue
-    return data.decode("utf-8", errors="replace")
+    data = data.strip(b"\xef\xbb\xbf")  # UTF-8 BOM (utf-8-sig handles rest)
+    try:
+        return data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        pass
+    return _cjk_fallback(data)
 
 
 def read_vtt(path: str) -> str:
