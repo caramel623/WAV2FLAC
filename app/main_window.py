@@ -17,6 +17,7 @@ from .ffmpeg_manager import get_ffmpeg_info, FFMPEG_DL_URL
 from .settings import Settings
 from .settings_dialog import open_settings
 from .trash import send_to_trash
+from .updater import UpdateWorker, REPO
 from .workers import BatchWorker, ConversionConfig, JobItem
 
 _STATUS_TEXT = {
@@ -128,8 +129,11 @@ class MainWindow(QMainWindow):
         self.scan_btn.clicked.connect(self._scan)
         self.settings_btn = QPushButton("設定…")
         self.settings_btn.clicked.connect(self._open_settings)
+        self.update_btn = QPushButton("檢查更新")
+        self.update_btn.clicked.connect(self._check_update)
         btn_row.addWidget(self.scan_btn, 1)
         btn_row.addWidget(self.settings_btn)
+        btn_row.addWidget(self.update_btn)
         form.addRow(btn_row)
 
         self._dlsite_scan = dlsite_mod.DlSiteScan()
@@ -482,6 +486,90 @@ class MainWindow(QMainWindow):
         self.log_view.append(text)
         sb = self.log_view.verticalScrollBar()
         sb.setValue(sb.maximum())
+
+    # --------------------------------------------------------- 更新
+    def _set_updating(self, busy: bool, text: str = "") -> None:
+        self._updating = busy
+        self.update_btn.setEnabled(not busy)
+        if busy:
+            self.progress.setRange(0, 100)
+            self.progress.setValue(0)
+            self.progress.setFormat(text or "更新中...")
+
+    def _check_update(self) -> None:
+        if getattr(self, "_updating", False):
+            return
+        self._set_updating(True, "檢查更新...")
+        self._append_log("▶ 檢查 GitHub 更新...")
+        self.update_worker = UpdateWorker(__version__)
+        self.update_thread = QThread(self)
+        self.update_worker.moveToThread(self.update_thread)
+        self.update_thread.started.connect(self.update_worker.run_check)
+        self.update_worker.checked.connect(self._on_checked)
+        self.update_thread.start()
+
+    def _on_checked(self, info: dict) -> None:
+        if self.update_thread:
+            self.update_thread.quit()
+            self.update_thread.wait(10000)
+            self.update_worker.deleteLater()
+            self.update_worker = None
+            self.update_thread = None
+        if info.get("error"):
+            self._append_log(f"✘ 檢查更新失敗:{info['error']}")
+            self._set_updating(False)
+            QMessageBox.critical(
+                self, "WAV2FLAC",
+                f"檢查更新失敗:\n{info['error']}\n\n請確認網路連線,或前往 {REPO}",
+            )
+            return
+        if not info["has_update"]:
+            self._append_log(f"已是最新版本 v{info['current_version']}")
+            self._set_updating(False)
+            QMessageBox.information(
+                self, "檢查更新",
+                f"已是最新版本 v{info['current_version']}。",
+            )
+            return
+        if not info["url"]:
+            self._append_log(f"發現新版本 v{info['latest_version']},但未找到可下載的 .zip 附件。")
+            self._set_updating(False)
+            QMessageBox.warning(self, "檢查更新", "發現新版本,但未找到可下載的 .zip 附件,請至發布頁下載。")
+            return
+        self._pending_update = info
+        self._append_log(f"發現新版本 v{info['latest_version']}")
+        ans = QMessageBox.question(
+            self, "檢查更新",
+            f"發現新版本 v{info['latest_version']}(目前 v{info['current_version']})。\n\n"
+            "要下載並更新嗎?\n(會下載更新包、重新啟動並覆蓋檔案,完成後自動刪除更新包)",
+        )
+        if ans == QMessageBox.Yes:
+            self._do_update()
+
+    def _do_update(self) -> None:
+        info = self._pending_update
+        self._set_updating(True, "下載更新 0%")
+        self.progress.setValue(0)
+        self._append_log(f"▶ 下載更新包 v{info['latest_version']} ...")
+        self.update_worker = UpdateWorker(__version__)
+        self.update_thread = QThread(self)
+        self.update_worker.moveToThread(self.update_thread)
+        self.update_worker.progress.connect(self._on_update_progress)
+        self.update_worker.log.connect(self._append_log)
+        self.update_worker.done.connect(self._on_update_done)
+        self.update_thread.started.connect(lambda: self.update_worker.run_update(info["url"]))
+        self.update_thread.finished.connect(self.update_thread.deleteLater)
+        self.update_thread.start()
+
+    def _on_update_progress(self, pct: int) -> None:
+        self.progress.setValue(pct)
+        self.progress.setFormat(f"下載更新 {pct}%")
+
+    def _on_update_done(self, res: dict) -> None:
+        if res.get("cancelled"):
+            self._append_log("↩ 已取消更新。")
+            self._set_updating(False)
+            self.statusBar().showMessage("已取消更新")
 
     # --------------------------------------------------------- drag drop
     def dragEnterEvent(self, e) -> None:  # noqa: N802
