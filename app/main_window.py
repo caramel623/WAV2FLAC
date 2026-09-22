@@ -4,9 +4,10 @@ import os
 from typing import List, Optional
 
 from PySide6.QtCore import Qt, QSize, QThread
+from PySide6.QtGui import QAction, QCursor
 from PySide6.QtWidgets import (
     QApplication, QFileDialog, QFormLayout, QGridLayout, QGroupBox, QHBoxLayout,
-    QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox, QComboBox,
+    QHeaderView, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QComboBox,
     QProgressBar, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem,
     QTextEdit, QCheckBox, QWidget, QAbstractItemView, QSizePolicy, QRadioButton,
 )
@@ -273,17 +274,49 @@ class MainWindow(QMainWindow):
     # ----------------------------------------------------------- slots
     def _choose_dlsite(self) -> None:
         base = self.dl_edit.text()
-        # 先嘗試選壓縮檔
+        chosen: List[str] = []
+        menu = QMenu(self)
+        a_file = QAction("壓縮檔 (.zip / .7z / .rar)", self)
+        a_dir = QAction("資料夾(已解開的最上層)", self)
+        a_file.triggered.connect(self._pick_dlsite_files)
+        a_dir.triggered.connect(self._pick_dlsite_folder)
+        menu.addAction(a_file)
+        menu.addAction(a_dir)
+        # 若輸入欄已有內容,允許直接清除
+        if base:
+            a_clear = QAction("清除", self)
+            a_clear.triggered.connect(lambda: self.dl_edit.clear())
+            menu.addSeparator()
+            menu.addAction(a_clear)
+        pos = QCursor.pos()
+        menu.exec(pos)
+
+    def _pick_dlsite_files(self) -> None:
+        base = self.dl_edit.text()
         files, _ = QFileDialog.getOpenFileNames(
             self, "選擇 DLsite 商品壓縮檔(.zip/.7z/.rar)", base,
             "壓縮檔 (*.zip *.7z *.rar);;所有檔案 (*)")
-        if not files:
-            # 退回選資料夾
-            d = QFileDialog.getExistingDirectory(self, "選擇 DLsite 商品最上層資料夾", base)
-            files = [d] if d else []
-        chosen = [p for p in files if p and p != base]
-        merged = ([base] if base else []) + chosen
-        self.dl_edit.setText(os.pathsep.join(merged))
+        if files:
+            self._merge_dl_input(files)
+
+    def _pick_dlsite_folder(self) -> None:
+        base = self.dl_edit.text()
+        d = QFileDialog.getExistingDirectory(self, "選擇 DLsite 商品最上層資料夾", base)
+        if d:
+            self._merge_dl_input([d])
+
+    def _merge_dl_input(self, paths: List[str]) -> None:
+        base = self.dl_edit.text()
+        base_list = [s for s in base.split(os.pathsep) if s] if base else []
+        merged: List[str] = []
+        seen = set(base_list)
+        for p in paths:
+            if p and p not in seen:
+                merged.append(p)
+                seen.add(p)
+        result = base_list + merged
+        self.dl_edit.setText(os.pathsep.join(result))
+        self._scan()
 
     def _choose_audio(self) -> None:
         d = QFileDialog.getExistingDirectory(self, "選擇音訊資料夾", self.audio_edit.text())
