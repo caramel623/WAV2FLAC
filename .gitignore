@@ -15,6 +15,10 @@ build/
 dist/
 *.spec
 
+# Build scripts (local only)
+build.bat
+scripts/
+
 # Logs
 logs/
 *.log
