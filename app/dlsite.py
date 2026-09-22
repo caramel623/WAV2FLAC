@@ -16,6 +16,7 @@ SUBTITLE_SUFFIXES = (".vtt", ".lrc")
 TRASHABLE_EXTS = {".mp3", ".aac", ".ogg", ".wma", ".opus"}
 
 _cache_dirs: List[str] = []
+_archive_origins: Dict[str, str] = {}
 
 
 def _is_subtitle(name: str) -> bool:
@@ -29,6 +30,8 @@ class DlSiteScan:
     trashable: List[str] = field(default_factory=list)
     scanned_roots: List[str] = field(default_factory=list)
     extract_count: int = 0
+    # temp_root(暫存解開目錄) -> 原始壓縮檔路徑
+    archive_origins: Dict[str, str] = field(default_factory=dict)
 
     @property
     def matched(self) -> List[MediaPair]:
@@ -67,6 +70,7 @@ def _resolve_sources(inputs: List[str]) -> List[str]:
                 _archive.extract_archive(path, tmp)
                 roots.append(tmp)
                 _cache_dirs.append(tmp)
+                _archive_origins[tmp] = path
             except Exception:
                 continue
         elif os.path.isdir(path):
@@ -78,6 +82,7 @@ def _resolve_sources(inputs: List[str]) -> List[str]:
 
 def scan_dlsite(inputs: List[str]) -> DlSiteScan:
     result = DlSiteScan()
+    _archive_origins.clear()
     roots = _resolve_sources(inputs)
     result.scanned_roots = roots
     audio: List[str] = []
@@ -85,6 +90,8 @@ def scan_dlsite(inputs: List[str]) -> DlSiteScan:
     trash: List[str] = []
     for r in roots:
         _walk_dir(r, audio, subs, trash)
+        if r in _archive_origins:
+            result.archive_origins[r] = _archive_origins[r]
     result.trashable = trash
 
     audio_by_stem: Dict[str, str] = {}

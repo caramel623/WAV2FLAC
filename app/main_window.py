@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import List
+from typing import List, Optional
 
 from PySide6.QtCore import Qt, QSize, QThread
 from PySide6.QtWidgets import (
@@ -331,7 +331,12 @@ class MainWindow(QMainWindow):
         sub = self.settings.dlsite_output_sub.strip() or self.convert_combo.currentData().upper()
         for pair in scan.pairs:
             base = pair.audio_path or pair.subtitle_path or ""
-            top = dlsite_mod.product_top(base)
+            # 若來源為壓縮檔,輸出到原壓縮檔所在資料夾(暫存會被清掉)
+            origin = self._find_archive_origin(scan, base)
+            if origin:
+                top = os.path.dirname(os.path.normpath(origin))
+            else:
+                top = dlsite_mod.product_top(base)
             if top:
                 pair.output_dir = os.path.join(top, sub)
 
@@ -357,6 +362,18 @@ class MainWindow(QMainWindow):
                          f"發現 {len(scan.trashable)} 個 MP3/低損檔"
                          + (",將清除同檔名 MP3" if trash_map else ""))
         self.statusBar().showMessage(f"DLsite 掃描完成:已配對 {matched} 筆")
+
+    @staticmethod
+    def _find_archive_origin(scan: dlsite_mod.DlSiteScan, base: str) -> Optional[str]:
+        base = os.path.normpath(base)
+        for tmp_root, orig in (scan.archive_origins or {}).items():
+            root = os.path.normpath(tmp_root)
+            try:
+                if os.path.relpath(base, root).split(os.sep)[0] != "..":
+                    return orig
+            except ValueError:
+                continue
+        return None
 
     def _populate_table(self) -> None:
         self.table.setRowCount(0)

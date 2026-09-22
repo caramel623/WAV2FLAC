@@ -77,29 +77,27 @@ class SettingsDialog(QDialog):
 
     # ---------------- Archive tab
     def _build_archive_tab(self) -> QWidget:
-        import importlib
+        from . import archive as _archive
         w = QWidget()
-        lay = QVBoxLayout(w)
-        lay.addWidget(QLabel("支援的壓縮格式(需安裝對應套件;ZIP 內建支援):"))
-        rows = QVBoxLayout()
-        for mod, label in (
-            ("zipfile", "ZIP(內建)"),
-            ("py7zr", "7Z (.7z)"),
-            ("rarfile", "RAR (.rar)"),
-        ):
-            try:
-                importlib.import_module(mod)
-                ok = True
-            except ImportError:
-                ok = False
-            item = QLabel(f"{'✓' if ok else '✗'} {label}")
-            item.setStyleSheet("color: green;" if ok else "color: gray;")
-            rows.addWidget(item)
-        lay.addLayout(rows)
-        note = QLabel("未安裝的格式可執行:  pip install py7zr rarfile")
-        note.setStyleSheet("color: gray;")
-        lay.addWidget(note)
-        lay.addStretch(1)
+        grid = QGridLayout(w)
+        grid.addWidget(QLabel("ZIP"), 0, 0)
+        z = QLabel("✓ 內建支援")
+        z.setStyleSheet("color: green;")
+        grid.addWidget(z, 0, 1)
+
+        seven_z = _archive.find_7z()
+        grid.addWidget(QLabel("7Z / RAR"), 1, 0)
+        if seven_z:
+            lbl = QLabel(f"✓ 7-Zip:{seven_z}")
+            lbl.setStyleSheet("color: green;")
+            grid.addWidget(lbl, 1, 1)
+        else:
+            lbl = QLabel("✗ 未找到 7-Zip(無法解 .7z/.rar)")
+            lbl.setStyleSheet("color: red;")
+            grid.addWidget(lbl, 1, 1)
+            hint = QLabel("請安裝 7-Zip(https://www.7-zip.org/)或解開後選取資料夾。")
+            grid.addWidget(hint, 2, 0, 1, 2)
+        grid.setRowStretch(3, 1)
         return w
 
     # ---------------- DLsite tab
