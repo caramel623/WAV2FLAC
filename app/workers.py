@@ -157,7 +157,7 @@ class BatchWorker(QObject):
                 os.remove(tmp)
             return ItemResult(pair.audio_path, "failed", message="output invalid")
         os.replace(tmp, out_path)
-        self.log.emit(f"done: {pair.stem} -> {os.path.basename(out_path)}")
+        self.log.emit(f"完成:{pair.stem} -> {os.path.basename(out_path)}")
         return ItemResult(pair.audio_path, "success", output=out_path)
 
 
