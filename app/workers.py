@@ -55,7 +55,7 @@ class BatchSummary:
 
 
 class BatchWorker(QObject):
-    progress = Signal(int, int, str)     # done, total, current_stem
+    progress = Signal(int, int, str, float)  # done, total, current_stem, item_pct
     item_finished = Signal(object)       # ItemResult
     log = Signal(str)
     finished = Signal(object)            # BatchSummary
@@ -90,7 +90,7 @@ class BatchWorker(QObject):
         for job in self.jobs:
             if self._cancel.is_set():
                 summary.cancelled = True
-                self.progress.emit(done + 1, summary.total, "cancelled")
+                self.progress.emit(done, summary.total, "cancelled", 100.0)
                 continue
             pair = job.pair
             result = self._process_one(job)
@@ -102,7 +102,7 @@ class BatchWorker(QObject):
             else:
                 summary.failed += 1
             done += 1
-            self.progress.emit(done, summary.total, pair.stem)
+            self.progress.emit(done, summary.total, pair.stem, 100.0)
         self.finished.emit(summary)
 
     def _log(self, msg: str) -> None:
@@ -129,12 +129,18 @@ class BatchWorker(QObject):
         # 1) Convert audio (即時進度写入 LOG)
         tmp = out_path + ".tmp"
         self._log(f"    轉檔中 … {os.path.basename(pair.audio_path)} → {self.config.convert_to.upper()}")
+
+        def _item_progress(pct: float) -> None:
+            # 把當前項目的百分比映射到整體進度列
+            self.progress.emit(job.index, job.total, pair.stem, pct)
+
         ok = convert_audio(
             self.config.ffmpeg_path, pair.audio_path, tmp,
             self.config.convert_to, self.config.aac_bitrate,
             self.config.flac_compression, self.config.target_sample_rate,
             ffprobe_path=self.config.ffprobe_path,
             log_callback=self._log,
+            progress_callback=_item_progress,
             cancel_event=self._cancel,
         )
         if self._cancel.is_set():

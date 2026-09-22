@@ -299,10 +299,11 @@ class MainWindow(QMainWindow):
             self.worker.request_cancel()
             self.statusBar().showMessage("取消中...")
 
-    def _on_progress(self, done: int, total: int, stem: str) -> None:
+    def _on_progress(self, done: int, total: int, stem: str, item_pct: float) -> None:
         self.progress.setRange(0, total)
-        self.progress.setValue(done)
-        self.progress.setFormat(f"{done}/{total} - {stem}")
+        base = done - 1 + item_pct / 100.0
+        self.progress.setValue(max(0, int(base)))
+        self.progress.setFormat(f"{done}/{total} - {stem}({item_pct:.0f}%)")
 
     def _on_item(self, result) -> None:
         if result.status == "failed":
