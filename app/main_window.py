@@ -23,7 +23,7 @@ from .workers import BatchWorker, ConversionConfig, JobItem
 
 _STATUS_TEXT = {
     PairStatus.MATCHED: "已配對",
-    PairStatus.MISSING_SUBTITLE: "缺少字幕",
+    PairStatus.MISSING_SUBTITLE: "無字幕(僅轉檔)",
     PairStatus.MISSING_AUDIO: "缺少音訊",
     PairStatus.SKIPPED: "略過",
 }
@@ -427,9 +427,9 @@ class MainWindow(QMainWindow):
         if not self.pairs:
             QMessageBox.warning(self, "WAV2FLAC", "尚無任何配對。請先點「掃描並配對」。")
             return
-        matched = [p for p in self.pairs if p.status == PairStatus.MATCHED]
-        if not matched:
-            QMessageBox.warning(self, "WAV2FLAC", "沒有已配對的音訊 + 字幕。")
+        convertible = [p for p in self.pairs if p.can_convert]
+        if not convertible:
+            QMessageBox.warning(self, "WAV2FLAC", "沒有可轉換的音訊。")
             return
         info = get_ffmpeg_info(self.settings.ffmpeg_path)
         if not info.ready:
@@ -443,7 +443,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "WAV2FLAC", "請先選擇輸出資料夾。")
             return
 
-        jobs = [JobItem(pair=p, index=i, total=len(matched)) for i, p in enumerate(matched)]
+        jobs = [JobItem(pair=p, index=i, total=len(convertible)) for i, p in enumerate(convertible)]
         cfg = ConversionConfig(
             convert_to=self.convert_combo.currentData(),
             output_dir="" if in_dlsite else self.out_edit.text(),

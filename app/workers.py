@@ -114,13 +114,15 @@ class BatchWorker(QObject):
 
     def _process_one(self, job: JobItem) -> ItemResult:
         pair = job.pair
-        if not pair.ready:
-            return ItemResult(pair.audio_path, "skipped", message=(pair.note or "not matched"))
+        if not pair.can_convert:
+            return ItemResult(pair.audio_path, "skipped", message=(pair.note or "no audio"))
 
         out_path, action = self._resolve_output(pair)
         idx = job.index
         total = job.total
-        self._log(f"[{idx}/{total}] {pair.stem}")
+        has_subtitle = bool(pair.subtitle_path)
+        tag = "" if has_subtitle else "(無字幕,僅轉檔)"
+        self._log(f"[{idx}/{total}] {pair.stem}{tag}")
 
         if action == "skip":
             self._log(f"    略過(已存在):{os.path.basename(out_path)}")
@@ -152,43 +154,46 @@ class BatchWorker(QObject):
         if not ok:
             return ItemResult(pair.audio_path, "failed", message="ffmpeg error")
 
-        # 2) Parse subtitle + write LRC
+        # 2) Parse subtitle + write LRC(無字幕時僅執行單純轉檔)
         lrc_text = ""
         unsynced_text = ""
         lrc_path = os.path.splitext(out_path)[0] + ".lrc"
-        try:
-            is_lrc_src = pair.subtitle_path.lower().endswith(".lrc")
-            if is_lrc_src:
-                # LRC 來源:直接複製(保留原標籤/順序),並解析 unsynced
-                import shutil
-                shutil.copyfile(pair.subtitle_path, lrc_path)
-                with open(pair.subtitle_path, "rb") as f:
-                    lrc_text = f.read().decode("utf-8", errors="replace")
-                unsynced_text = "\n".join(
-                    l.strip() for l in lrc_text.splitlines()
-                    if l.strip() and not l.strip().startswith("[")
-                )
-                self._log("    已複製 LRC(來源)")
-            else:
-                self._log("    解析 VTT 字幕 …")
-                cues = parse_subtitle(pair.subtitle_path)
-                lrc_text = cues_to_lrc(cues)
-                unsynced_text = cues_to_unsynced(cues)
-                with open(lrc_path, "w", encoding="utf-8") as f:
-                    f.write(lrc_text)
-                self._log(f"    已產生 LRC({len(cues)} 段)")
-        except Exception as e:  # noqa: BLE001
-            self._log(f"    字幕處理失敗:{e}")
-            return ItemResult(pair.audio_path, "failed", message=f"subtitle error: {e}")
+        if has_subtitle:
+            try:
+                is_lrc_src = pair.subtitle_path.lower().endswith(".lrc")
+                if is_lrc_src:
+                    # LRC 來源:直接複製(保留原標籤/順序),並解析 unsynced
+                    import shutil
+                    shutil.copyfile(pair.subtitle_path, lrc_path)
+                    with open(pair.subtitle_path, "rb") as f:
+                        lrc_text = f.read().decode("utf-8", errors="replace")
+                    unsynced_text = "\n".join(
+                        l.strip() for l in lrc_text.splitlines()
+                        if l.strip() and not l.strip().startswith("[")
+                    )
+                    self._log("    已複製 LRC(來源)")
+                else:
+                    self._log("    解析 VTT 字幕 …")
+                    cues = parse_subtitle(pair.subtitle_path)
+                    lrc_text = cues_to_lrc(cues)
+                    unsynced_text = cues_to_unsynced(cues)
+                    with open(lrc_path, "w", encoding="utf-8") as f:
+                        f.write(lrc_text)
+                    self._log(f"    已產生 LRC({len(cues)} 段)")
+            except Exception as e:  # noqa: BLE001
+                self._log(f"    字幕處理失敗:{e}")
+                return ItemResult(pair.audio_path, "failed", message=f"subtitle error: {e}")
 
-        # 3) Metadata
-        if self.config.embed_lyrics:
-            self._log("    寫入金標與歌詞 …")
-            source_tags = get_source_tags(tmp)
-            meta = build_metadata_map(source_tags, lrc=lrc_text,
-                                      unsynced=unsynced_text,
-                                      filename=pair.audio_path)
-            apply_metadata(tmp, meta, self.config.convert_to)
+            # 3) Metadata
+            if self.config.embed_lyrics:
+                self._log("    寫入金標與歌詞 …")
+                source_tags = get_source_tags(tmp)
+                meta = build_metadata_map(source_tags, lrc=lrc_text,
+                                          unsynced=unsynced_text,
+                                          filename=pair.audio_path)
+                apply_metadata(tmp, meta, self.config.convert_to)
+        else:
+            self._log("    單純轉檔(無字幕)")
 
         # 4) Verify + rename tmp -> final
         if not verify_output(tmp, self.config.ffprobe_path):

@@ -32,6 +32,12 @@ class MediaPair:
     def ready(self) -> bool:
         return self.status == PairStatus.MATCHED and bool(self.audio_path) and bool(self.subtitle_path)
 
+    @property
+    def can_convert(self) -> bool:
+        """有音訊即可轉換;有字幕時附帶字幕,無字幕時執行單純轉檔。"""
+        return bool(self.audio_path) and self.status in (
+            PairStatus.MATCHED, PairStatus.MISSING_SUBTITLE)
+
 
 AUDIO_EXTS = {".wav"}
 SUBTITLE_EXTS = {".vtt"}
