@@ -38,7 +38,7 @@ class DlSiteScan:
         return [p for p in self.pairs if p.status == PairStatus.MATCHED]
 
 
-def _walk_dir(root: str, audio: List[str], subs: Dict[str, str],
+def _walk_dir(root: str, audio: List[str], subs: List[str],
               trash: List[str]) -> None:
     for dirpath, dirnames, filenames in os.walk(root):
         # 確定性排序
@@ -51,8 +51,7 @@ def _walk_dir(root: str, audio: List[str], subs: Dict[str, str],
             if ext in AUDIO_EXTS:
                 audio.append(full)
             elif _is_subtitle(fn):
-                stem = _norm_stem(os.path.splitext(fn)[0])
-                subs.setdefault(stem, full)
+                subs.append(full)
             elif ext in TRASHABLE_EXTS:
                 trash.append(full)
 
@@ -80,37 +79,61 @@ def _resolve_sources(inputs: List[str]) -> List[str]:
     return roots
 
 
+def _product_boundary(file_path: str, root: str) -> str:
+    """選定 root 內的「商品邊界」:從檔案往上、最接近的 RJ 開頭資料夾(含 root 自身);
+    若到 root 為止都沒 RJ,則以 root 本身為邊界。
+    用途:把同一個 root 下的多個商品分開配對,避免跨商品(隔壁資料夾)串味。"""
+    root = os.path.normpath(root)
+    d = os.path.dirname(os.path.normpath(file_path))
+    while True:
+        if os.path.basename(d).lower().startswith("rj"):
+            return d
+        if d == root:
+            return root
+        parent = os.path.dirname(d)
+        if parent == d:
+            return root
+        d = parent
+
+
 def scan_dlsite(inputs: List[str]) -> DlSiteScan:
     result = DlSiteScan()
     _archive_origins.clear()
     roots = _resolve_sources(inputs)
     result.scanned_roots = roots
-    audio: List[str] = []
-    subs: Dict[str, str] = {}
-    trash: List[str] = []
+
     for r in roots:
+        audio: List[str] = []
+        subs: List[str] = []
+        trash: List[str] = []
         _walk_dir(r, audio, subs, trash)
+        result.trashable.extend(trash)
         if r in _archive_origins:
             result.archive_origins[r] = _archive_origins[r]
-    result.trashable = trash
 
-    audio_by_stem: Dict[str, str] = {}
-    for a in audio:
-        stem = _norm_stem(os.path.splitext(os.path.basename(a))[0])
-        audio_by_stem.setdefault(stem, a)
+        # 依「商品邊界 + stem」配對,避免同一 root 下多個商品(隔壁資料夾)互相干擾
+        prod_audio: Dict[tuple, str] = {}
+        for a in audio:
+            b = _product_boundary(a, r)
+            stem = _norm_stem(os.path.splitext(os.path.basename(a))[0])
+            prod_audio.setdefault((b, stem), a)
+        prod_subs: Dict[tuple, str] = {}
+        for s in subs:
+            b = _product_boundary(s, r)
+            stem = _norm_stem(os.path.splitext(os.path.basename(s))[0])
+            prod_subs.setdefault((b, stem), s)
 
-    all_stems = list(dict.fromkeys(list(audio_by_stem.keys()) + list(subs.keys())))
-    for stem in all_stems:
-        a = audio_by_stem.get(stem)
-        s = subs.get(stem)
-        if a and s:
-            result.pairs.append(MediaPair(a, s, None, PairStatus.MATCHED))
-        elif a:
-            result.pairs.append(MediaPair(a, None, None, PairStatus.MISSING_SUBTITLE,
-                                          "subtitle not found"))
-        else:
-            result.pairs.append(MediaPair(None, s, None, PairStatus.MISSING_AUDIO,
-                                          "audio not found"))
+        for key in list(dict.fromkeys(list(prod_audio.keys()) + list(prod_subs.keys()))):
+            a = prod_audio.get(key)
+            s = prod_subs.get(key)
+            if a and s:
+                result.pairs.append(MediaPair(a, s, None, PairStatus.MATCHED))
+            elif a:
+                result.pairs.append(MediaPair(a, None, None, PairStatus.MISSING_SUBTITLE,
+                                              "subtitle not found"))
+            else:
+                result.pairs.append(MediaPair(None, s, None, PairStatus.MISSING_AUDIO,
+                                              "audio not found"))
     return result
 
 
