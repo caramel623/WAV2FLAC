@@ -356,11 +356,26 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"掃描完成:共 {len(self.pairs)} 筆,已配對 {matched} 筆")
 
     def _scan_dlsite(self) -> None:
-        inputs = [s for s in self.dl_edit.text().split(os.pathsep) if s]
+        raw = [s for s in self.dl_edit.text().split(os.pathsep) if s]
+        # 嚴格限制:只掃描「實際存在」的路徑;舊設定檔裡失效/搬家的路徑會被剔除
+        inputs: List[str] = []
+        stale: List[str] = []
+        seen = set()
+        for s in raw:
+            if s in seen:
+                continue
+            seen.add(s)
+            if os.path.exists(s):
+                inputs.append(s)
+            else:
+                stale.append(s)
+        if stale:
+            self.dl_edit.setText(os.pathsep.join(inputs))
+            self._append_log(f"    略過 {len(stale)} 個不存在的路徑(可能已搬移/刪除)")
         if not inputs:
             QMessageBox.warning(self, "WAV2FLAC", "請先加入 DLsite 商品最上層資料夾或壓縮檔。")
             return
-        self._append_log(f"▶ 掃描 DLsite:{len(inputs)} 個來源")
+        self._append_log(f"▶ 掃描 DLsite:{len(inputs)} 個來源(僅限其下子資料夾)")
         scan = dlsite_mod.scan_dlsite(inputs)
         self._dlsite_scan = scan
 
