@@ -140,7 +140,7 @@ def _write_update_bat(new_dir: str, dest: str, tmp_dir: str, pid: int) -> str:
 
 class UpdateWorker(QObject):
     checked = Signal(object)    # dict: has_update/latest_version/url/... 或 {"error": ...}
-    progress = Signal(int)      # 下載百分比 0-100
+    progress = Signal(int, int, float)  # (百分比, 已收位元組, 位元組/秒)
     log = Signal(str)
     done = Signal(object)       # dict: ok/cancelled/message
 
@@ -213,22 +213,40 @@ class UpdateWorker(QObject):
             self._cleanup(tmp_dir)
             self.done.emit({"ok": False, "message": str(e)})
 
+    STALL_SECS = 15  # 連續此秒數收不到任何新資料 → 視為停滯
+
     def _download(self, url: str, dest: str) -> None:
+        from PySide6.QtCore import QElapsedTimer
+        if self._cancel_event.is_set():
+            raise InterruptedError
         req = urllib.request.Request(url, headers={"User-Agent": _UA})
+        # urllib 的 timeout 是 socket 層(兩次收 packet 之間):「完全沒資料」時會逾時,
+        # 但「緩慢但有資料」的連線不會觸發。為避免下載時介面看起來卡死:
+        #   - 用 read1(size) 每次只取「目前到得了」的資料,不阻塞等滿 → 小量、頻繁回傳,
+        #     進度與速度持續跳動,用戶看得到程式還在動;
+        #   - 另設看門狗:若連續 STALL_SECS 秒收不到任何新資料,判定下載停滯並拋錯。
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as r:
             total = int(r.headers.get("Content-Length") or 0)
             done = 0
+            last_data = time.monotonic()
+            timer = QElapsedTimer()
+            timer.start()
             with open(dest, "wb") as f:
                 while True:
                     if self._cancel_event.is_set():
                         raise InterruptedError
-                    chunk = r.read(256 * 1024)
+                    chunk = r.read1(64 * 1024)
+                    now = time.monotonic()
                     if not chunk:
-                        break
+                        if now - last_data > self.STALL_SECS:
+                            raise TimeoutError(f"下載停滯(超過 {int(self.STALL_SECS)} 秒沒有新資料)")
+                        break  # EOF
                     f.write(chunk)
                     done += len(chunk)
-                    if total:
-                        self.progress.emit(int(done * 100 / total))
+                    last_data = now
+                    spd = done / max(timer.elapsed() / 1000.0, 0.001)  # 位元組/秒
+                    pct = int(done * 100 / total) if total else 100
+                    self.progress.emit(pct, done, spd)
 
     @staticmethod
     def _cleanup(tmp_dir: str) -> None:

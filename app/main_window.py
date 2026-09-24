@@ -488,6 +488,10 @@ class MainWindow(QMainWindow):
         self.progress.setFormat("轉換中...")
 
     def _cancel(self) -> None:
+        if getattr(self, "_updating", False) and self.update_worker:
+            self.update_worker.request_cancel()
+            self.statusBar().showMessage("取消中...")
+            return
         if self.worker:
             self.worker.request_cancel()
             self.statusBar().showMessage("取消中...")
@@ -539,6 +543,10 @@ class MainWindow(QMainWindow):
     def _set_updating(self, busy: bool, text: str = "") -> None:
         self._updating = busy
         self.update_btn.setEnabled(not busy)
+        # 下載/檢查中:「掃描」「開始」停用,「取消」可用,避免誤觸
+        self.scan_btn.setEnabled(not busy)
+        self.start_btn.setEnabled(not busy)
+        self.cancel_btn.setEnabled(busy)
         if busy:
             self.progress.setRange(0, 100)
             self.progress.setValue(0)
@@ -557,12 +565,21 @@ class MainWindow(QMainWindow):
         self.update_thread.start()
 
     def _on_checked(self, info: dict) -> None:
+        cancelled = bool(
+            getattr(self.update_worker, "_cancel_event", None)
+            and self.update_worker._cancel_event.is_set()
+        )
         if self.update_thread:
             self.update_thread.quit()
             self.update_thread.wait(10000)
             self.update_worker.deleteLater()
             self.update_worker = None
             self.update_thread = None
+        if cancelled:
+            self._append_log("↩ 已取消檢查更新。")
+            self._set_updating(False)
+            self.statusBar().showMessage("已取消檢查更新")
+            return
         if info.get("error"):
             self._append_log(f"✘ 檢查更新失敗:{info['error']}")
             self._set_updating(False)
@@ -609,15 +626,62 @@ class MainWindow(QMainWindow):
         self.update_thread.finished.connect(self.update_thread.deleteLater)
         self.update_thread.start()
 
-    def _on_update_progress(self, pct: int) -> None:
+    def _on_update_progress(self, pct: int, done_bytes: int, speed: float) -> None:
         self.progress.setValue(pct)
-        self.progress.setFormat(f"下載更新 {pct}%")
+        text = self._fmt_progress(pct, done_bytes, speed)
+        self.progress.setFormat(text)
+        self.statusBar().showMessage(text)
+
+    @staticmethod
+    def _fmt_progress(pct: int, done_bytes: int, speed: float) -> str:
+        size = done_bytes / 1048576.0  # MB
+        kbs = speed / 1024.0  # KB/s
+        if pct >= 100:
+            extra = ""
+        elif speed <= 0:
+            extra = "  (連線中…)"
+        elif kbs < 512:
+            extra = f"  {kbs:.0f} KB/s  (速度很慢,可點「取消」)"
+        else:
+            # 剩餘時間 ≈ (已收 / 百分比) 推總,再扣掉已收,除以速度
+            if pct > 0:
+                remaining_bytes = done_bytes * (100 - pct) / pct
+                eta = remaining_bytes / speed
+                eta_txt = f"  約剩 {eta / 60.0:.0f} 分" if eta >= 90 else f"  約剩 {eta:.0f} 秒"
+            else:
+                eta_txt = ""
+            extra = f"  {kbs / 1024.0:.2f} MB/s{eta_txt}"
+        return f"下載更新 {pct}%  ({size:.1f} MB){extra}"
 
     def _on_update_done(self, res: dict) -> None:
+        if self.update_thread:
+            self.update_thread.quit()
+            self.update_thread.wait(10000)
+            self.update_thread = None
+        self.update_worker = None
+        # 成功且為正式 EXE 模式:程式已 os._exit(),不會走到這裡
         if res.get("cancelled"):
             self._append_log("↩ 已取消更新。")
             self._set_updating(False)
+            self.start_btn.setEnabled(True)
             self.statusBar().showMessage("已取消更新")
+        elif res.get("ok"):
+            self._append_log("✔ 更新完成,可重新執行新版本的 WAV2FLAC。")
+            self._set_updating(False)
+            self.start_btn.setEnabled(True)
+            self.progress.setFormat("更新完成")
+            QMessageBox.information(self, "檢查更新", "更新完成,重新執行程式即可。")
+        else:
+            self._append_log(f"✘ 更新失敗,維持目前版本:{res.get('message', '未知錯誤')}")
+            self._set_updating(False)
+            self.start_btn.setEnabled(True)
+            self.progress.setFormat("更新失敗")
+            QMessageBox.critical(
+                self, "檢查更新",
+                f"更新失敗:\n{res.get('message', '未知錯誤')}\n\n"
+                "目前程式仍為原本版本。請確認網路後再嘗試,或至 "
+                f"{REPO} 手動下載。",
+            )
 
     # --------------------------------------------------------- drag drop
     def dragEnterEvent(self, e) -> None:  # noqa: N802
