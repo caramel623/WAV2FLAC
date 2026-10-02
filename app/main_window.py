@@ -475,8 +475,12 @@ class MainWindow(QMainWindow):
             # 絕不退回空字串——那會把多商品塌成純 stem 全域比對(正是要修的 bug)。
             return os.path.dirname(os.path.normpath(file_path))
         b = dlsite_mod._product_boundary(file_path, root)
+        if b == root and os.path.basename(root).lower().startswith("rj"):
+            # root 本身就是一整個 RJ 商品(常見:直接選商品最上層資料夾):
+            # 不細分——同商品內 WAV/ 與 MP3/ 各子目錄屬同一組,否則 MP3 清除會靜默失效
+            return root
         if b == root:
-            # root 內找不下 RJ 邊界(商品資料夾是日文/中文全名時很常見):
+            # root 為「多商品容器」(如下載資料夾), 內為日文/中文全名商品:
             # 改以「root 下的第一層子目錄」分組,同商品的 Voice/ 與 MP3/ 仍同組,
             # 隔壁商品則分開,避免同名檔跨商品誤刪。
             d = os.path.dirname(os.path.normpath(file_path))

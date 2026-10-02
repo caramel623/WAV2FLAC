@@ -160,9 +160,13 @@ class BatchWorker(QObject):
             cancel_event=self._cancel,
         )
         if self._cancel.is_set():
+            if os.path.isfile(tmp):
+                os.remove(tmp)
             self._log(f"    已取消 {pair.stem}")
             return ItemResult(pair.audio_path, "cancelled", message="cancelled")
         if not ok:
+            if os.path.isfile(tmp):
+                os.remove(tmp)
             return ItemResult(pair.audio_path, "failed", message="ffmpeg error")
 
         # 2) Parse subtitle + write LRC(無字幕時僅執行單純轉檔)

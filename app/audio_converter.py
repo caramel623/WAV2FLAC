@@ -184,8 +184,13 @@ def convert_audio(ffmpeg_path: str, src: str, dst: str, convert_to: str,
         proc.wait(timeout=30)
     except subprocess.TimeoutExpired:
         proc.kill()
-        proc.communicate()
+        proc.wait()  # 不 communicate(): stderr 由 pump 執行緒讀, 避免雙重讀/關 pipe 競爭
     except Exception as e:  # noqa: BLE001
+        proc.kill()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
         _log(f"    FFmpeg 異常:{e}")
         return False
     if cancelled:
