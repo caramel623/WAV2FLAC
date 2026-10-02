@@ -35,6 +35,8 @@ class Settings:
     trash_mp3: bool = False
     # DL 模式輸出子資料夾名稱(留空 = 使用格式名 FLAC/M4A)
     dlsite_output_sub: str = ""
+    # DL 模式輸出時保留原始資料夾結構(遞迴):FLAC/WAV_NoSE/01.flac
+    mirror_structure: bool = False
 
     @staticmethod
     def load(path: str = DEFAULT_SETTINGS_PATH) -> "Settings":

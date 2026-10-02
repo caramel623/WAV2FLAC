@@ -381,6 +381,7 @@ class MainWindow(QMainWindow):
 
         # 依商品最上層決定輸出子資料夾(商品/FLAC 或 商品/M4A)
         sub = self.settings.dlsite_output_sub.strip() or self.convert_combo.currentData().upper()
+        mirror = self.settings.mirror_structure
         for pair in scan.pairs:
             base = pair.audio_path or pair.subtitle_path or ""
             # 若來源為壓縮檔,輸出到原壓縮檔所在資料夾(暫存會被清掉)
@@ -389,8 +390,19 @@ class MainWindow(QMainWindow):
                 top = os.path.dirname(os.path.normpath(origin))
             else:
                 top = dlsite_mod.product_top(base)
-            if top:
-                pair.output_dir = os.path.join(top, sub)
+            if not top:
+                continue
+            out = os.path.join(top, sub)
+            # 勾選「保留結構」:依來源相對於商品頂(或壓縮檔根)的子目錄遞迴輸出
+            if mirror:
+                base_d = os.path.dirname(base)
+                rel = self._safe_rel(base_d, top)
+                if rel is None:
+                    r0 = self._root_of(scan, base)
+                    rel = self._safe_rel(base_d, r0) if r0 else None
+                if rel and rel != os.curdir:
+                    out = os.path.normpath(os.path.join(out, rel))
+            pair.output_dir = out
 
         # MP3 清除對照表(音訊檔名 → 同檔名之 MP3 等低損檔)
         trash_map: dict = {}
@@ -425,6 +437,24 @@ class MainWindow(QMainWindow):
                     return orig
             except ValueError:
                 continue
+        return None
+
+    @staticmethod
+    def _safe_rel(path: str, root: str) -> Optional[str]:
+        """計算 path 相對於 root 的相對路徑;path 不在 root 下時回傳 None。"""
+        path, root = os.path.normpath(path), os.path.normpath(root)
+        try:
+            rel = os.path.relpath(path, root)
+        except ValueError:
+            return None
+        return None if rel.startswith(f"..{os.sep}") or rel == ".." else rel
+
+    def _root_of(self, scan: dlsite_mod.DlSiteScan, base: str) -> Optional[str]:
+        """找出 base 所在的掃描根(壓縮檔為暫存根),供遞迴結構基準。"""
+        for r in scan.scanned_roots:
+            root = os.path.normpath(r)
+            if self._safe_rel(base, root):
+                return root
         return None
 
     def _populate_table(self) -> None:
@@ -698,8 +728,8 @@ class MainWindow(QMainWindow):
                 elif dlsite_mod.archive.is_archive(path):
                     dl.append(path)
             if dl:
-                base = self.dl_edit.text()
-                self.dl_edit.setText((base + os.pathsep + os.pathsep.join(dl)).strip(os.pathsep))
+                # 拖放 = 指定(取代)來源;若與舊路徑疊加會連舊資料夾一起掃到
+                self.dl_edit.setText(os.pathsep.join(dl))
             self._scan_dlsite()
             return
 
@@ -714,10 +744,9 @@ class MainWindow(QMainWindow):
             elif os.path.isdir(path):
                 audio.append(path)
                 subs.append(path)
+        # 拖放 = 指定(取代)來源,避免與舊路徑疊加
         if audio:
-            base = self.audio_edit.text()
-            self.audio_edit.setText((base + os.pathsep + os.pathsep.join(audio)).strip(os.pathsep))
+            self.audio_edit.setText(os.pathsep.join(audio))
         if subs:
-            base = self.sub_edit.text()
-            self.sub_edit.setText((base + os.pathsep + os.pathsep.join(subs)).strip(os.pathsep))
+            self.sub_edit.setText(os.pathsep.join(subs))
         self._scan()
