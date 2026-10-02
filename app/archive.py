@@ -64,7 +64,9 @@ def _extract_zip(src: str, dest: str) -> None:
                 data = zf.read(info)
                 if name.startswith(("MAC", "__MACOSX")) or ".DS_Store" in name:
                     continue
-                target = os.path.join(dest, _decode_name(name))
+                # 0x800 = UTF-8 flag; 未標 flag 時 Python 已用 cp437 誤解 CJK,需回轉還原
+                is_utf8 = bool(info.flag_bits & 0x800)
+                target = os.path.join(dest, _decode_name(name, is_utf8))
                 os.makedirs(os.path.dirname(target), exist_ok=True)
                 with open(target, "wb") as f:
                     f.write(data)
@@ -72,14 +74,21 @@ def _extract_zip(src: str, dest: str) -> None:
                 continue
 
 
-def _decode_name(name: str) -> str:
-    """zip 檔名常被誤解為 cp437;還原 UTF-8 檔名。"""
-    if any(ord(c) > 0x7f for c in name):
+def _decode_name(name: str, is_utf8: bool = False) -> str:
+    """zip 檔名還原。
+
+    - UTF-8 flag 已設定:Python 已正確解開,原樣回傳。
+    - 未設 flag:Python 用 cp437 誤解,需 encode 回 cp437 再 decode 為
+      UTF-8(或 Big5,部分 Windows 工具以 Big5 寫入)才能還原 CJK 檔名。
+    """
+    if is_utf8:
         return name
-    try:
-        return name.encode("cp437").decode("utf-8")
-    except (LookupError, UnicodeEncodeError, UnicodeDecodeError):
-        return name
+    for enc in ("utf-8", "big5"):
+        try:
+            return name.encode("cp437").decode(enc)
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            continue
+    return name
 
 
 def _extract_with_7z(seven_z: str, src: str, dest: str) -> None:

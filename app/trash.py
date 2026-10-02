@@ -27,9 +27,11 @@ def _trash_one(path: str) -> bool:
     op = _SHFILEOPSTRUCTW()
     op.wFunc = _FO_DELETE
     op.pFrom = path + "\0"
+    op.pTo = None
     op.fFlags = _FOF_NOCONFIRM | _FOF_SILENT | _FOF_ALLOWUNDO
     try:
-        res = ctypes.windll.shell32.SHFileMoveW(ctypes.byref(op), op)
+        # 正確 API 是 SHFileOperationW(SHFILEOPSTRUCTW*); 0 成功、非 0 為 FOS 錯誤碼
+        res = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op))
     except Exception:  # noqa: BLE001
         return False
     return res == 0

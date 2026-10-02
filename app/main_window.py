@@ -36,6 +36,9 @@ class MainWindow(QMainWindow):
         self.pairs: List[MediaPair] = []
         self.worker: BatchWorker | None = None
         self.thread = None
+        self.update_worker: UpdateWorker | None = None
+        self.update_thread: Optional[QThread] = None
+        self._dlsite_trash_map: dict = {}
         self.setWindowTitle(f"WAV2FLAC 批次轉檔工具 v{__version__}")
         self.resize(1000, 680)
         self.setAcceptDrops(True)
@@ -350,6 +353,8 @@ class MainWindow(QMainWindow):
         audio_src = [s for s in self.audio_edit.text().split(os.pathsep) if s]
         sub_src = [s for s in self.sub_edit.text().split(os.pathsep) if s]
         out = self.out_edit.text()
+        # 手動模式不用 DLsite 的 MP3 清除對照表,清掉以避上一輪殘留
+        self._dlsite_trash_map = {}
         self.pairs = scan_paths(audio_src, sub_src, out)
         self._populate_table()
         matched = sum(1 for p in self.pairs if p.status == PairStatus.MATCHED)
@@ -404,19 +409,23 @@ class MainWindow(QMainWindow):
                     out = os.path.normpath(os.path.join(out, rel))
             pair.output_dir = out
 
-        # MP3 清除對照表(音訊檔名 → 同檔名之 MP3 等低損檔)
+        # MP3 清除對照表(音訊完整路徑 → 同商品、同檔名之 MP3)
+        # 以「商品邊界 + stem」分組,避免把其他商品/其他來源的同名 MP3 一起刪掉
         trash_map: dict = {}
         if self.settings.trash_mp3:
-            mp3_by_stem: dict = {}
+            mp3_index: dict = {}
             for mp3 in scan.trashable:
+                boundary = self._boundary_of(scan, mp3)
                 stem = dlsite_mod._norm_stem(os.path.splitext(os.path.basename(mp3))[0])
-                mp3_by_stem.setdefault(stem, []).append(mp3)
+                mp3_index.setdefault((boundary, stem), []).append(mp3)
             for pair in scan.pairs:
                 if not pair.audio_path:
                     continue
+                boundary = self._boundary_of(scan, pair.audio_path)
                 stem = dlsite_mod._norm_stem(os.path.splitext(os.path.basename(pair.audio_path))[0])
-                if stem in mp3_by_stem:
-                    trash_map[os.path.basename(pair.audio_path)] = mp3_by_stem[stem]
+                hits = mp3_index.get((boundary, stem), [])
+                if hits:
+                    trash_map[os.path.normpath(pair.audio_path)] = hits
 
         self._dlsite_trash_map = trash_map
         self.pairs = scan.pairs
@@ -456,6 +465,14 @@ class MainWindow(QMainWindow):
             if self._safe_rel(base, root):
                 return root
         return None
+
+    def _boundary_of(self, scan: dlsite_mod.DlSiteScan, file_path: str) -> str:
+        """檔案之「商品邊界」(其掃描根內最近的 RJ 資料夾,否則該根)。
+        用於把 MP3 限制在同商品內,避免跨商品誤刪。"""
+        root = self._root_of(scan, file_path)
+        if not root:
+            return ""
+        return dlsite_mod._product_boundary(file_path, root)
 
     def _populate_table(self) -> None:
         self.table.setRowCount(0)
@@ -712,6 +729,25 @@ class MainWindow(QMainWindow):
                 "目前程式仍為原本版本。請確認網路後再嘗試,或至 "
                 f"{REPO} 手動下載。",
             )
+
+    # --------------------------------------------------- 關閉視窗
+    def closeEvent(self, e) -> None:  # noqa: N802
+        # 關閉前取消並等待執行中的線程,避免 Qt「QThread destroyed while running」崩潰
+        if self.worker:
+            self.worker.request_cancel()
+        if self.update_worker:
+            self.update_worker.request_cancel()
+        if self.thread:
+            self.thread.quit()
+            if not self.thread.wait(5000):
+                self.thread.terminate()  # 仍在跑才強停
+                self.thread.wait(1000)
+        if self.update_thread:
+            self.update_thread.quit()
+            if not self.update_thread.wait(5000):
+                self.update_thread.terminate()
+                self.update_thread.wait(1000)
+        e.accept()
 
     # --------------------------------------------------------- drag drop
     def dragEnterEvent(self, e) -> None:  # noqa: N802

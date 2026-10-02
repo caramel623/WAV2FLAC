@@ -40,7 +40,7 @@ class MediaPair:
 
 
 AUDIO_EXTS = {".wav"}
-SUBTITLE_EXTS = {".vtt"}
+SUBTITLE_EXTS = {".vtt", ".lrc"}
 _AUDIO_STEM_SUFFIXES = (".wav", ".flac", ".m4a", ".mp3", ".aac", ".ogg",
                         ".wma", ".aiff", ".mp4", ".opus")
 

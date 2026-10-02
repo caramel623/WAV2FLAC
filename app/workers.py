@@ -90,23 +90,32 @@ class BatchWorker(QObject):
     def run(self) -> None:
         summary = BatchSummary(total=len(self.jobs), cancelled=False)
         done = 0
-        for job in self.jobs:
-            if self._cancel.is_set():
-                summary.cancelled = True
-                self.progress.emit(done, summary.total, "cancelled", 100.0)
-                continue
-            pair = job.pair
-            result = self._process_one(job)
-            self.item_finished.emit(result)
-            if result.status == "success":
-                summary.success += 1
-            elif result.status == "skipped":
-                summary.skipped += 1
-            else:
-                summary.failed += 1
-            done += 1
-            self.progress.emit(done, summary.total, pair.stem, 100.0)
-        self.finished.emit(summary)
+        try:
+            for job in self.jobs:
+                if self._cancel.is_set():
+                    summary.cancelled = True
+                    self.progress.emit(done, summary.total, "cancelled", 100.0)
+                    continue
+                pair = job.pair
+                try:
+                    result = self._process_one(job)
+                except Exception as e:  # noqa: BLE001 - 單項異常不該中斷整批
+                    result = ItemResult(pair.audio_path, "failed", message=str(e))
+                    self._log(f"    ✘ 未預期錯誤:{e}")
+                self.item_finished.emit(result)
+                if result.status == "success":
+                    summary.success += 1
+                elif result.status == "skipped":
+                    summary.skipped += 1
+                elif result.status == "cancelled":
+                    summary.cancelled = True
+                else:
+                    summary.failed += 1
+                done += 1
+                self.progress.emit(done, summary.total, pair.stem, 100.0)
+        finally:
+            # 無論是否異常,都要發出 finished,讓 GUI 解除凍結
+            self.finished.emit(summary)
 
     def _log(self, msg: str) -> None:
         safe = str(msg)
@@ -203,7 +212,7 @@ class BatchWorker(QObject):
             return ItemResult(pair.audio_path, "failed", message="output invalid")
         os.replace(tmp, out_path)
         self._log(f"    ✔ 完成 → {os.path.basename(out_path)}")
-        mp3s = self.config.trash_map.get(os.path.basename(pair.audio_path), [])
+        mp3s = self.config.trash_map.get(os.path.normpath(pair.audio_path), []) if pair.audio_path else []
         if mp3s:
             self.dlsite_mp3s.emit(mp3s)
         return ItemResult(pair.audio_path, "success", output=out_path)

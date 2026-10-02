@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import locale
 import os
 import shutil
 import subprocess
@@ -128,12 +129,15 @@ def _write_update_bat(new_dir: str, dest: str, tmp_dir: str, pid: int) -> str:
         "  timeout /t 1 /nobreak >nul\r\n"
         "  goto wait\r\n"
         ")\r\n"
-        f'xcopy /E /Y /I /Q /R /W "{new_dir}\\*" "{dest}"\r\n'
+        f'xcopy /E /Y /I /R /W "{new_dir}\\*" "{dest}"\r\n'
         f'rmdir /S /Q "{tmp_dir}"\r\n'
         f'start "" "{dest}\\WAV2FLAC.exe"\r\n'
     )
     bat_path = os.path.join(tempfile.gettempdir(), "_wav2flac_update.bat")
-    with open(bat_path, "w", encoding="utf-8") as f:
+    # cmd.exe 批次檔以「ANSI 碼表」解析(非 UTF-8); 用系統預設 ANSI 編碼寫入,
+    # 才能正確支援含空白/CJK 的安裝路徑(如 C:\Program Files\...、C:\Users\某使用者\...)
+    enc = locale.getpreferredencoding(False)
+    with open(bat_path, "w", encoding=enc) as f:
         f.write(bat)
     return bat_path
 
@@ -192,8 +196,9 @@ class UpdateWorker(QObject):
                 self.log.emit("即將重新啟動並覆蓋檔案...")
                 bat = _write_update_bat(new_dir, dest, tmp_dir, os.getpid())
                 flags = _CREATE_NO_WINDOW | _CREATE_NEW_PROCESS_GROUP
+                # list 形式(不用 shell=True): 路徑含空白/CJK 也能正確傳達給 cmd
                 subprocess.Popen(
-                    bat, shell=True, close_fds=True, creationflags=flags,
+                    ["cmd", "/c", bat], close_fds=True, creationflags=flags,
                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
