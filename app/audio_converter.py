@@ -126,12 +126,34 @@ def convert_audio(ffmpeg_path: str, src: str, dst: str, convert_to: str,
     last_eta_logged = -1.0
     start_wall = time.monotonic()
     err_lines: List[str] = []
+    _DONE = object()
 
-    try:
+    # 用獨立執行緒把 stderr 灌進 queue: 主迴圈以 timeout 取資料,
+    # 即使 ffmpeg 長時間無輸出(讀取/卡住)也不會阻塞在 read 上, 取消才有效。
+    import queue as _queue
+    q: "_queue.Queue" = _queue.Queue()
+
+    def _pump() -> None:
         assert proc.stderr is not None
         for raw in proc.stderr:
+            q.put(raw)
+        q.put(_DONE)
+
+    pump = threading.Thread(target=_pump, daemon=True)
+    pump.start()
+
+    cancelled = False
+    try:
+        while True:
             if cancel_event is not None and cancel_event.is_set():
                 proc.kill()
+                cancelled = True
+                break
+            try:
+                raw = q.get(timeout=0.2)
+            except _queue.Empty:
+                continue
+            if raw is _DONE:
                 break
             line = raw.decode("utf-8", errors="replace").strip()
             if not line:
@@ -165,6 +187,8 @@ def convert_audio(ffmpeg_path: str, src: str, dst: str, convert_to: str,
         proc.communicate()
     except Exception as e:  # noqa: BLE001
         _log(f"    FFmpeg 異常:{e}")
+        return False
+    if cancelled:
         return False
 
     if cancel_event is not None and cancel_event.is_set():

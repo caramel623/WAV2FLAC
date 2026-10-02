@@ -71,6 +71,17 @@ class TestScanPaths(unittest.TestCase):
         self.assertTrue(matched[0].ready)
         self.tmp.cleanup()
 
+    def test_lrc_pair(self):
+        a, s = self._setup()
+        _mk(a, "lyric.wav")
+        _mk(s, "lyric.lrc", "[00:00.00]一\n")
+        pairs = scan_paths([a], [s], "out")
+        matched = [p for p in pairs if p.status == PairStatus.MATCHED]
+        self.assertEqual(len(matched), 1)
+        self.assertEqual(matched[0].stem, "lyric")
+        self.assertTrue(matched[0].subtitle_path.endswith(".lrc"))
+        self.tmp.cleanup()
+
     def test_single_files(self):
         tmp = tempfile.TemporaryDirectory()
         a = _mk(tmp.name, "x.wav")

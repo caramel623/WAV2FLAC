@@ -8,6 +8,7 @@ _FO_DELETE = 3
 _FOF_NOCONFIRM = 0x10
 _FOF_SILENT = 0x04
 _FOF_ALLOWUNDO =  0x40
+_FOF_NOERRORUI = 0x400
 
 
 class _SHFILEOPSTRUCTW(ctypes.Structure):
@@ -28,7 +29,7 @@ def _trash_one(path: str) -> bool:
     op.wFunc = _FO_DELETE
     op.pFrom = path + "\0"
     op.pTo = None
-    op.fFlags = _FOF_NOCONFIRM | _FOF_SILENT | _FOF_ALLOWUNDO
+    op.fFlags = _FOF_NOCONFIRM | _FOF_SILENT | _FOF_ALLOWUNDO | _FOF_NOERRORUI
     try:
         # 正確 API 是 SHFileOperationW(SHFILEOPSTRUCTW*); 0 成功、非 0 為 FOS 錯誤碼
         res = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op))

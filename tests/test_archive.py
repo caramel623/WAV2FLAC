@@ -37,6 +37,24 @@ class TestArchive(unittest.TestCase):
             self.assertEqual(f.read(), "[00:00.00]一\n")
         shutil.rmtree(root)
 
+    def test_decode_name_no_flag_encodings(self):
+        # 模擬 Python 以 cp437 誤解的「未設 UTF-8 flag」情況, 驗證各 CJK 編碼還原
+        for real in ("LRC/繁體/01.lrc",   # Big5 來源
+                     "音源/曲名.wav",       # cp932(日/中)
+                     "歌01.wav"):           # 一般
+            raw = real.encode("big5") if "繁" in real else real.encode("cp932")
+            mangled = raw.decode("cp437")   # zipfile 未 flag 時得到的字串
+            got = archive._decode_name(mangled, False)
+            self.assertEqual(got, real, f"failed for {real!r}")
+        # UTF-8 來源的 no-flag 還原
+        raw = "甲/乙.wav".encode("utf-8")
+        got = archive._decode_name(raw.decode("cp437"), False)
+        self.assertEqual(got, "甲/乙.wav")
+        # 純 ASCII 不受影響
+        self.assertEqual(archive._decode_name("abc.wav", False), "abc.wav")
+        # is_utf8=True 原樣回傳
+        self.assertEqual(archive._decode_name("繁體/乙.wav", True), "繁體/乙.wav")
+
     @unittest.skipUnless(archive.find_7z(), "7-Zip not installed")
     def test_7z_extract(self):
         seven = archive.find_7z()

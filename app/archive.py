@@ -74,20 +74,34 @@ def _extract_zip(src: str, dest: str) -> None:
                 continue
 
 
-def _decode_name(name: str, is_utf8: bool = False) -> str:
+def _plausible(s: str) -> bool:
+    """排除會產生 C1 控制字元/NUL 的解碼結果(正常 CJK 檔名不會有)。"""
+    return not any(ord(c) < 0x20 or 0x80 <= ord(c) <= 0x9f for c in s)
+
+
+def _decode_name(name: str, is_utf8: bool) -> str:
     """zip 檔名還原。
 
     - UTF-8 flag 已設定:Python 已正確解開,原樣回傳。
-    - 未設 flag:Python 用 cp437 誤解,需 encode 回 cp437 再 decode 為
-      UTF-8(或 Big5,部分 Windows 工具以 Big5 寫入)才能還原 CJK 檔名。
+    - 未設 flag:Python 用 cp437 誤解(cp437 對 0x00–0xFF 雙射,可精確還原
+      原始位元組),再依候選編碼解回:純 ASCII 原樣、UTF-8、Big5(繁體)、
+      cp932(日文)、gb18030(簡中)。全部失敗才退回原字串。
     """
     if is_utf8:
         return name
-    for enc in ("utf-8", "big5"):
+    if not any(ord(c) > 0x7f for c in name):
+        return name  # 純 ASCII 不需還原
+    try:
+        raw = name.encode("cp437")
+    except UnicodeEncodeError:
+        return name
+    for enc in ("utf-8", "big5", "cp932", "gb18030"):
         try:
-            return name.encode("cp437").decode(enc)
-        except (UnicodeEncodeError, UnicodeDecodeError):
+            s = raw.decode(enc)
+        except (UnicodeDecodeError, LookupError):
             continue
+        if _plausible(s):
+            return s
     return name
 
 

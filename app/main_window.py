@@ -471,8 +471,19 @@ class MainWindow(QMainWindow):
         用於把 MP3 限制在同商品內,避免跨商品誤刪。"""
         root = self._root_of(scan, file_path)
         if not root:
-            return ""
-        return dlsite_mod._product_boundary(file_path, root)
+            # 檔案不在任何掃描根下(理論上不該發生):退回檔案「所在目錄」,
+            # 絕不退回空字串——那會把多商品塌成純 stem 全域比對(正是要修的 bug)。
+            return os.path.dirname(os.path.normpath(file_path))
+        b = dlsite_mod._product_boundary(file_path, root)
+        if b == root:
+            # root 內找不下 RJ 邊界(商品資料夾是日文/中文全名時很常見):
+            # 改以「root 下的第一層子目錄」分組,同商品的 Voice/ 與 MP3/ 仍同組,
+            # 隔壁商品則分開,避免同名檔跨商品誤刪。
+            d = os.path.dirname(os.path.normpath(file_path))
+            rel = self._safe_rel(d, root)
+            if rel and rel != os.curdir:
+                return os.path.join(root, rel.split(os.sep)[0])
+        return b
 
     def _populate_table(self) -> None:
         self.table.setRowCount(0)
@@ -732,21 +743,26 @@ class MainWindow(QMainWindow):
 
     # --------------------------------------------------- 關閉視窗
     def closeEvent(self, e) -> None:  # noqa: N802
-        # 關閉前取消並等待執行中的線程,避免 Qt「QThread destroyed while running」崩潰
+        # 關閉前取消並等待執行中的線程,避免 Qt「QThread destroyed while running」崩潰。
+        # quit() 只請事件迴圈「目前 slot 跑完後」才退出, 不會中斷正在跑的 run(),
+        # 因此先 request_cancel() 讓 worker 主動快速收尾, 再給較長的 wait 時間;
+        # 真的逾時才用 terminate() 當最後手段。
         if self.worker:
             self.worker.request_cancel()
         if self.update_worker:
             self.update_worker.request_cancel()
-        if self.thread:
-            self.thread.quit()
-            if not self.thread.wait(5000):
-                self.thread.terminate()  # 仍在跑才強停
-                self.thread.wait(1000)
-        if self.update_thread:
-            self.update_thread.quit()
-            if not self.update_thread.wait(5000):
-                self.update_thread.terminate()
-                self.update_thread.wait(1000)
+        for th in (self.thread, self.update_thread):
+            if not th:
+                continue
+            th.quit()
+            if not th.wait(15000):
+                th.terminate()  # 最後手段
+                th.wait(2000)
+        # 清掉 DLsite 暫存解開目錄(掃描後未轉換就關窗時避免洩漏 %TEMP%)
+        try:
+            dlsite_mod.cleanup_cache()
+        except Exception:  # noqa: BLE001
+            pass
         e.accept()
 
     # --------------------------------------------------------- drag drop

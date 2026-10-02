@@ -84,17 +84,11 @@ def latest_release() -> LatestRelease:
 
 
 def _extract_zip(zip_path: str, dest: str) -> None:
+    from . import archive
     with zipfile.ZipFile(zip_path) as zf:
         for zi in zf.infolist():
-            name = zi.filename
-            if not (zi.flag_bits & 0x800):
-                try:
-                    name = name.encode("cp437").decode("utf-8")
-                except (UnicodeEncodeError, UnicodeDecodeError):
-                    try:
-                        name = name.encode("cp437").decode("big5")
-                    except (UnicodeEncodeError, UnicodeDecodeError):
-                        pass
+            # 複用 archive._decode_name: 統一處理 CJK 檔名(cp437 誤解還原)
+            name = archive._decode_name(zi.filename, bool(zi.flag_bits & 0x800))
             target = os.path.join(dest, *name.split("/"))
             if zi.is_dir():
                 os.makedirs(target, exist_ok=True)
@@ -129,16 +123,23 @@ def _write_update_bat(new_dir: str, dest: str, tmp_dir: str, pid: int) -> str:
         "  timeout /t 1 /nobreak >nul\r\n"
         "  goto wait\r\n"
         ")\r\n"
-        f'xcopy /E /Y /I /R /W "{new_dir}\\*" "{dest}"\r\n'
+        f'xcopy /E /Y /I /R "{new_dir}\\*" "{dest}"\r\n'
         f'rmdir /S /Q "{tmp_dir}"\r\n'
         f'start "" "{dest}\\WAV2FLAC.exe"\r\n'
     )
     bat_path = os.path.join(tempfile.gettempdir(), "_wav2flac_update.bat")
-    # cmd.exe 批次檔以「ANSI 碼表」解析(非 UTF-8); 用系統預設 ANSI 編碼寫入,
-    # 才能正確支援含空白/CJK 的安裝路徑(如 C:\Program Files\...、C:\Users\某使用者\...)
+    # cmd.exe 批次檔以「ANSI 碼表」解析。路徑皆為 ASCII 時用系統 ANSI 編碼寫入即可;
+    # 一旦含 CJK(如 C:\Users\某使用者\...), 用 UTF-8 寫並在開頭 `chcp 65001` 切碼表,
+    # 才能正確讀到路徑(避免亂碼)。
+    need_chcp = any(ord(c) > 0x7f for c in (new_dir + dest + tmp_dir))
     enc = locale.getpreferredencoding(False)
+    if need_chcp:
+        enc = "utf-8"
+        body = "@chcp 65001 >nul\r\n" + bat
+    else:
+        body = bat
     with open(bat_path, "w", encoding=enc) as f:
-        f.write(bat)
+        f.write(body)
     return bat_path
 
 

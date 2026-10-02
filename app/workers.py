@@ -137,6 +137,8 @@ class BatchWorker(QObject):
             self._log(f"    略過(已存在):{os.path.basename(out_path)}")
             return ItemResult(pair.audio_path, "skipped", message="exists, policy=skip")
 
+        if self._cancel.is_set():
+            return ItemResult(pair.audio_path, "cancelled", message="cancelled")
         out_dir = os.path.dirname(out_path)
         os.makedirs(out_dir, exist_ok=True)
 
@@ -203,6 +205,12 @@ class BatchWorker(QObject):
                 apply_metadata(tmp, meta, self.config.convert_to)
         else:
             self._log("    單純轉檔(無字幕)")
+
+        if self._cancel.is_set():
+            if os.path.isfile(tmp):
+                os.remove(tmp)
+            self._log(f"    已取消 {pair.stem}")
+            return ItemResult(pair.audio_path, "cancelled", message="cancelled")
 
         # 4) Verify + rename tmp -> final
         if not verify_output(tmp, self.config.ffprobe_path):
