@@ -8,6 +8,27 @@ from typing import Optional
 DEFAULT_SETTINGS_PATH = os.path.join(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))), "settings.json")
 
+# 型別字串(因 from __future__ import annotations, f.type 常為字串)對應實際型別
+_TYPE_ALIASES = {"str": str, "int": int, "bool": bool}
+
+
+def _matches_type(val, typ) -> bool:
+    """檢查值是否符合欄位宣告的型別;不符時欄位回退預設值。
+    bool 特別處理: bool 不是 int 的子類, 但 int 不該通過 bool 欄位;
+    反之 int 值通過 bool 欄位會失真, 故严格要求。"""
+    if isinstance(typ, str):
+        typ = _TYPE_ALIASES.get(typ, typ)
+    if not isinstance(typ, type):
+        return True  # 未知/無型別: 放行
+    if typ is bool:
+        return isinstance(val, bool)
+    # int 欄位允許 int(排除 bool, 因 bool 是 int 子型別)
+    if typ is int:
+        return isinstance(val, int) and not isinstance(val, bool)
+    if typ is str:
+        return isinstance(val, str)
+    return isinstance(val, typ)
+
 
 @dataclass
 class Settings:
@@ -45,9 +66,21 @@ class Settings:
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            known = {f.name for f in Settings.__dataclass_fields__.values()}  # type: ignore[attr-defined]
-            fields = [k for k in data.keys() if k in known]
-            return Settings(**{k: data[k] for k in fields})
+            if not isinstance(data, dict):
+                return Settings()
+            defaults = Settings()
+            valid: "dict[str, object]" = {}
+            for f in Settings.__dataclass_fields__.values():  # type: ignore[attr-defined]
+                key = f.name
+                if key not in data:
+                    continue
+                val = data[key]
+                typ = f.type  # 可能為 str(文字化型別)或實際型別
+                if not _matches_type(val, typ):
+                    # 型別不符(如 bool 被存成字串 "true" 或 aac_bitrate 是 int):回退預設值
+                    val = getattr(defaults, key)
+                valid[key] = val
+            return Settings(**valid)
         except (json.JSONDecodeError, TypeError, ValueError, OSError):
             return Settings()
 

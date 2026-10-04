@@ -79,13 +79,13 @@ def _build_ffmpeg_args(src: str, dst: str, convert_to: str,
         return [
             "-y", "-i", src,
             "-vn", "-c:a", "aac", "-b:a", aac_bitrate,
-            "-ar", sr, "-movflags", "+faststart", "-f", "mp4", dst,
+            "-ar", sr, "-map_metadata", "0", "-movflags", "+faststart", "-f", "mp4", dst,
         ]
     # flac (lossless)
     return [
         "-y", "-i", src,
         "-vn", "-c:a", "flac", "-compression_level", str(flac_compression),
-        "-f", "flac", dst,
+        "-map_metadata", "0", "-f", "flac", dst,
     ]
 
 

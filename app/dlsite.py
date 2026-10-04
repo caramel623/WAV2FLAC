@@ -96,6 +96,38 @@ def _product_boundary(file_path: str, root: str) -> str:
         d = parent
 
 
+def _pair_boundary(file_path: str, root: str) -> str:
+    """檔案之「配對邊界」: scan_dlsite 配對與 main_window trash_map 共用同一函式。
+
+    - 檔案不在该 root 下(理論上不該): 退回檔案「所在目錄」, 絕不退回全域 stem。
+    - root 本身就是一整件 RJ 商品(直接選商品最上層資料夾, 很常見): 整件同組、不細分,
+      否則同商品內 WAV/ 與 MP3/ 各子目錄會分組、導致 MP3 清除靜默失效。
+    - root 為「多商品容器」(非 RJ 開頭, 如下載資料夾): 改以 root 下第一層子目錄分組,
+      同商品的 Voice/ 與 MP3/ 仍同組、隔壁商品則分開, 避免同名檔跨商品漏配/誤刪。
+    - 有 RJ 子資料夾: 用最近的 RJ 邊界(_product_boundary)。
+    """
+    root = os.path.normpath(root)
+    f = os.path.normpath(file_path)
+    try:
+        rel = os.path.relpath(f, root)
+    except ValueError:
+        return os.path.dirname(f)
+    if rel.startswith(f"..{os.sep}") or rel == "..":
+        return os.path.dirname(f)
+    b = _product_boundary(file_path, root)
+    if b == root:
+        if os.path.basename(root).lower().startswith("rj"):
+            return root
+        d = os.path.dirname(f)
+        try:
+            drel = os.path.relpath(d, root)
+        except ValueError:
+            return root
+        if drel and drel != os.curdir and not drel.startswith(f"..{os.sep}"):
+            return os.path.join(root, drel.split(os.sep)[0])
+    return b
+
+
 def scan_dlsite(inputs: List[str]) -> DlSiteScan:
     result = DlSiteScan()
     _archive_origins.clear()
@@ -114,12 +146,12 @@ def scan_dlsite(inputs: List[str]) -> DlSiteScan:
         # 依「商品邊界 + stem」配對,避免同一 root 下多個商品(隔壁資料夾)互相干擾
         prod_audio: Dict[tuple, str] = {}
         for a in audio:
-            b = _product_boundary(a, r)
+            b = _pair_boundary(a, r)
             stem = _norm_stem(os.path.splitext(os.path.basename(a))[0])
             prod_audio.setdefault((b, stem), a)
         prod_subs: Dict[tuple, str] = {}
         for s in subs:
-            b = _product_boundary(s, r)
+            b = _pair_boundary(s, r)
             stem = _norm_stem(os.path.splitext(os.path.basename(s))[0])
             prod_subs.setdefault((b, stem), s)
 

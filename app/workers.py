@@ -10,7 +10,7 @@ from PySide6.QtCore import QObject, Signal, QThread
 from .audio_converter import convert_audio, verify_output
 from .file_matcher import MediaPair
 from .metadata_writer import apply_metadata, build_metadata_map, get_source_tags
-from .subtitle_converter import cues_to_lrc, cues_to_unsynced, parse_subtitle
+from .subtitle_converter import cues_to_lrc, cues_to_unsynced, parse_subtitle, _decode_bytes
 
 
 @dataclass
@@ -181,7 +181,7 @@ class BatchWorker(QObject):
                     import shutil
                     shutil.copyfile(pair.subtitle_path, lrc_path)
                     with open(pair.subtitle_path, "rb") as f:
-                        lrc_text = f.read().decode("utf-8", errors="replace")
+                        lrc_text = _decode_bytes(f.read())
                     unsynced_text = "\n".join(
                         l.strip() for l in lrc_text.splitlines()
                         if l.strip() and not l.strip().startswith("[")

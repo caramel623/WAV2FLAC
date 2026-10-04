@@ -467,27 +467,13 @@ class MainWindow(QMainWindow):
         return None
 
     def _boundary_of(self, scan: dlsite_mod.DlSiteScan, file_path: str) -> str:
-        """檔案之「商品邊界」(其掃描根內最近的 RJ 資料夾,否則該根)。
-        用於把 MP3 限制在同商品內,避免跨商品誤刪。"""
+        """檔案之「商品邊界」:複用 dlsite._pair_boundary,與 scan 配對共用同一邏輯,
+        把 MP3 限制在同商品內,避免跨商品誤刪。"""
         root = self._root_of(scan, file_path)
         if not root:
-            # 檔案不在任何掃描根下(理論上不該發生):退回檔案「所在目錄」,
-            # 絕不退回空字串——那會把多商品塌成純 stem 全域比對(正是要修的 bug)。
+            # 檔案不在任何掃描根下(理論上不該發生):退回檔案「所在目錄」
             return os.path.dirname(os.path.normpath(file_path))
-        b = dlsite_mod._product_boundary(file_path, root)
-        if b == root and os.path.basename(root).lower().startswith("rj"):
-            # root 本身就是一整個 RJ 商品(常見:直接選商品最上層資料夾):
-            # 不細分——同商品內 WAV/ 與 MP3/ 各子目錄屬同一組,否則 MP3 清除會靜默失效
-            return root
-        if b == root:
-            # root 為「多商品容器」(如下載資料夾), 內為日文/中文全名商品:
-            # 改以「root 下的第一層子目錄」分組,同商品的 Voice/ 與 MP3/ 仍同組,
-            # 隔壁商品則分開,避免同名檔跨商品誤刪。
-            d = os.path.dirname(os.path.normpath(file_path))
-            rel = self._safe_rel(d, root)
-            if rel and rel != os.curdir:
-                return os.path.join(root, rel.split(os.sep)[0])
-        return b
+        return dlsite_mod._pair_boundary(file_path, root)
 
     def _populate_table(self) -> None:
         self.table.setRowCount(0)
@@ -544,10 +530,9 @@ class MainWindow(QMainWindow):
         self.worker.finished.connect(self._on_finished)
         self.worker.finished.connect(self.thread.quit)
         self.thread.start()
-        self.start_btn.setEnabled(False)
-        self.cancel_btn.setEnabled(True)
         self.progress.setRange(0, 0)
         self.progress.setFormat("轉換中...")
+        self._refresh_buttons()
 
     def _cancel(self) -> None:
         if getattr(self, "_updating", False) and self.update_worker:
@@ -592,8 +577,7 @@ class MainWindow(QMainWindow):
             msg += ",已取消"
         self._append_log(f"\n✔ {msg}")
         self.progress.setFormat(msg)
-        self.start_btn.setEnabled(True)
-        self.cancel_btn.setEnabled(False)
+        self._refresh_buttons()
         self.statusBar().showMessage(self.progress.format())
 
     def _append_log(self, text: str) -> None:
@@ -602,20 +586,31 @@ class MainWindow(QMainWindow):
         sb.setValue(sb.maximum())
 
     # --------------------------------------------------------- 更新
+    def _refresh_buttons(self) -> None:
+        """依「轉換中 / 更新中」實際狀態決定按鈕可用性,各結點統一呼叫,
+        避免某一分支(如更新完成)無條件覆蓋另一流程(如轉換中)的按鈕狀態。"""
+        converting = self.worker is not None
+        updating = self.update_worker is not None and getattr(self, "_updating", False)
+        busy = converting or updating
+        self.start_btn.setEnabled(not busy)
+        self.scan_btn.setEnabled(not busy)
+        self.cancel_btn.setEnabled(busy)
+        self.update_btn.setEnabled(not busy)
+
     def _set_updating(self, busy: bool, text: str = "") -> None:
         self._updating = busy
-        self.update_btn.setEnabled(not busy)
-        # 下載/檢查中:「掃描」「開始」停用,「取消」可用,避免誤觸
-        self.scan_btn.setEnabled(not busy)
-        self.start_btn.setEnabled(not busy)
-        self.cancel_btn.setEnabled(busy)
         if busy:
             self.progress.setRange(0, 100)
             self.progress.setValue(0)
             self.progress.setFormat(text or "更新中...")
+        self._refresh_buttons()
 
     def _check_update(self) -> None:
         if getattr(self, "_updating", False):
+            return
+        if self.worker is not None:
+            # 轉換進行中: 先讓轉換結束(或取消)再檢查更新, 避免按鈕狀態互相打架
+            QMessageBox.information(self, "WAV2FLAC", "轉換進行中,請先等待完成或取消後再檢查更新。")
             return
         self._set_updating(True, "檢查更新...")
         self._append_log("▶ 檢查 GitHub 更新...")
@@ -672,6 +667,9 @@ class MainWindow(QMainWindow):
         )
         if ans == QMessageBox.Yes:
             self._do_update()
+        else:
+            # 答 No: update_worker 已為 None, 還原按鈕狀態(避免剩 _updating=True)
+            self._set_updating(False)
 
     def _do_update(self) -> None:
         info = self._pending_update
@@ -725,18 +723,15 @@ class MainWindow(QMainWindow):
         if res.get("cancelled"):
             self._append_log("↩ 已取消更新。")
             self._set_updating(False)
-            self.start_btn.setEnabled(True)
             self.statusBar().showMessage("已取消更新")
         elif res.get("ok"):
             self._append_log("✔ 更新完成,可重新執行新版本的 WAV2FLAC。")
             self._set_updating(False)
-            self.start_btn.setEnabled(True)
             self.progress.setFormat("更新完成")
             QMessageBox.information(self, "檢查更新", "更新完成,重新執行程式即可。")
         else:
             self._append_log(f"✘ 更新失敗,維持目前版本:{res.get('message', '未知錯誤')}")
             self._set_updating(False)
-            self.start_btn.setEnabled(True)
             self.progress.setFormat("更新失敗")
             QMessageBox.critical(
                 self, "檢查更新",
@@ -765,6 +760,12 @@ class MainWindow(QMainWindow):
         # 清掉 DLsite 暫存解開目錄(掃描後未轉換就關窗時避免洩漏 %TEMP%)
         try:
             dlsite_mod.cleanup_cache()
+        except Exception:  # noqa: BLE001
+            pass
+        # 關窗前把目前 UI 狀態寫回 settings, 避免使用者調整過的選項(格式/位元率/政策等)
+        # 只在點「開始」時才存檔、未點開始就關窗會遺失
+        try:
+            self._save_settings()
         except Exception:  # noqa: BLE001
             pass
         e.accept()
