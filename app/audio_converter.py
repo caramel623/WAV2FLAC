@@ -45,7 +45,8 @@ def probe_audio(ffprobe_path: str, path: str) -> Optional[AudioInfo]:
     try:
         proc = subprocess.run(cmd, capture_output=True,
                               encoding="utf-8", errors="replace",
-                              shell=False, timeout=30)
+                              shell=False, timeout=30,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         if proc.returncode != 0:
             return None
         data = json.loads(proc.stdout)
@@ -119,6 +120,7 @@ def convert_audio(ffmpeg_path: str, src: str, dst: str, convert_to: str,
     proc = subprocess.Popen(
         cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
         stderr=subprocess.PIPE, shell=False,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
 
     last_pct = -1.0

@@ -111,6 +111,7 @@ def _extract_with_7z(seven_z: str, src: str, dest: str) -> None:
     proc = subprocess.run(
         cmd, capture_output=True, encoding="utf-8", errors="replace",
         shell=False, timeout=3600,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     # 7-Zip exit code: 0=成功、1=警告(非致命)、>=2=錯誤。僅 >=2 才視為失敗。
     if proc.returncode >= 2:

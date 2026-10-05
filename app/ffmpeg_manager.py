@@ -106,6 +106,7 @@ def get_ffmpeg_version(ffmpeg_path: str) -> str:
             [ffmpeg_path, "-version"],
             capture_output=True, encoding="utf-8", errors="replace",
             shell=False, timeout=10,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         if proc.returncode == 0 and proc.stdout:
             return proc.stdout.strip().splitlines()[0]
