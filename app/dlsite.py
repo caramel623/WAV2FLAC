@@ -7,6 +7,8 @@ from typing import Dict, List, Optional
 
 from .file_matcher import _norm_stem, MediaPair, PairStatus
 from . import archive as _archive
+# 同時暴露 `archive` 別名, 供 main_window 等處以 `dlsite_mod.archive.is_archive(...)` 呼叫
+archive = _archive
 
 # 音訊:僅 WAV(DL 商品以 WAV 為無損源)
 AUDIO_EXTS = {".wav"}
@@ -32,6 +34,8 @@ class DlSiteScan:
     extract_count: int = 0
     # temp_root(暫存解開目錄) -> 原始壓縮檔路徑
     archive_origins: Dict[str, str] = field(default_factory=dict)
+    # 掃描/解壓過程中失敗(含解壓失敗路徑與原因), 供 GUI 回報
+    errors: List[str] = field(default_factory=list)
 
     @property
     def matched(self) -> List[MediaPair]:
@@ -56,8 +60,10 @@ def _walk_dir(root: str, audio: List[str], subs: List[str],
                 trash.append(full)
 
 
-def _resolve_sources(inputs: List[str]) -> List[str]:
-    """把輸入(資料夾/壓縮檔)展開為可掃描的目錄;壓縮檔先解開到暫存。"""
+def _resolve_sources(inputs: List[str], errors: List[str]) -> List[str]:
+    """把輸入(資料夾/壓縮檔)展開為可掃描的目錄;壓縮檔先解開到暫存。
+    失敗(如解壓縮錯誤)會寫入 errors 列出原因,不再靜默吞掉。"""
+    import shutil
     roots: List[str] = []
     for raw in inputs:
         if not raw:
@@ -65,13 +71,17 @@ def _resolve_sources(inputs: List[str]) -> List[str]:
         path = os.path.normpath(raw)
         if _archive.is_archive(path) and os.path.isfile(path):
             tmp = tempfile.mkdtemp(prefix="wav2flac_dl_")
+            # 先登記暫存目錄, 解壓失敗也能被 cleanup_cache 清到(避免 %TEMP% 垃圾)
+            _cache_dirs.append(tmp)
             try:
                 _archive.extract_archive(path, tmp)
                 roots.append(tmp)
-                _cache_dirs.append(tmp)
                 _archive_origins[tmp] = path
-            except Exception:
-                continue
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"解壓縮失敗:{os.path.basename(path)}({e})")
+                shutil.rmtree(tmp, ignore_errors=True)
+                if tmp in _cache_dirs:
+                    _cache_dirs.remove(tmp)
         elif os.path.isdir(path):
             roots.append(path)
         elif os.path.isfile(path) and os.path.splitext(path)[1].lower() in AUDIO_EXTS:
@@ -128,10 +138,29 @@ def _pair_boundary(file_path: str, root: str) -> str:
     return b
 
 
+def _dedupe_roots(roots: List[str]) -> List[str]:
+    """去除「包含關係」的掃描根:若根 A 是根 B 的祖先,只保留 A(B 會被重複掃)。
+    同時正規化路徑並去重。"""
+    norm = []
+    for r in roots:
+        p = os.path.normpath(r)
+        if p not in norm:
+            norm.append(p)
+    kept: List[str] = []
+    for r in norm:
+        # 若 r 已在任何已保留根的底下, 則跳過
+        if any(os.path.commonpath([r, k]) == k for k in kept):
+            continue
+        kept.append(r)
+    return kept
+
+
 def scan_dlsite(inputs: List[str]) -> DlSiteScan:
     result = DlSiteScan()
     _archive_origins.clear()
-    roots = _resolve_sources(inputs)
+    # 清掉上一輪暫存, 避免 %TEMP% 累積(長存的多輪掃描場景)
+    cleanup_cache()
+    roots = _dedupe_roots(_resolve_sources(inputs, result.errors))
     result.scanned_roots = roots
 
     for r in roots:

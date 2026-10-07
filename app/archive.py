@@ -54,22 +54,38 @@ def find_7z() -> Optional[str]:
     return None
 
 
+def _safe_target(dest: str, name: str) -> Optional[str]:
+    """計算安全解壓目標路徑;防 zip-slip(路徑穿越)。
+    name 含 ..、絕對路徑或跨磁碟機時回傳 None(該 entry 跳過不寫)。"""
+    name = name.replace("\\", "/")
+    if os.path.isabs(name):
+        return None
+    target = os.path.normpath(os.path.join(dest, name))
+    dest = os.path.normpath(dest)
+    if target != dest and not target.startswith(dest + os.sep):
+        return None
+    return target
+
+
 def _extract_zip(src: str, dest: str) -> None:
+    dest = os.path.normpath(dest)
     with zipfile.ZipFile(src) as zf:
         for info in zf.infolist():
             if info.is_dir():
                 continue
             name = info.filename
             try:
-                data = zf.read(info)
                 if name.startswith(("MAC", "__MACOSX")) or ".DS_Store" in name:
                     continue
                 # 0x800 = UTF-8 flag; 未標 flag 時 Python 已用 cp437 誤解 CJK,需回轉還原
                 is_utf8 = bool(info.flag_bits & 0x800)
-                target = os.path.join(dest, _decode_name(name, is_utf8))
+                target = _safe_target(dest, _decode_name(name, is_utf8))
+                if target is None:
+                    continue  # 路徑穿越, 跳過
                 os.makedirs(os.path.dirname(target), exist_ok=True)
-                with open(target, "wb") as f:
-                    f.write(data)
+                # streaming(避免把整個 entry 讀進 memory, 大 WAV 峰值記憶體暴增)
+                with zf.open(info) as s, open(target, "wb") as f:
+                    shutil.copyfileobj(s, f)
             except (OSError, RuntimeError):
                 continue
 

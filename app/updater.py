@@ -85,11 +85,14 @@ def latest_release() -> LatestRelease:
 
 def _extract_zip(zip_path: str, dest: str) -> None:
     from . import archive
+    dest = os.path.normpath(dest)
     with zipfile.ZipFile(zip_path) as zf:
         for zi in zf.infolist():
             # 複用 archive._decode_name: 統一處理 CJK 檔名(cp437 誤解還原)
             name = archive._decode_name(zi.filename, bool(zi.flag_bits & 0x800))
-            target = os.path.join(dest, *name.split("/"))
+            target = archive._safe_target(dest, name)
+            if target is None:
+                continue  # zip-slip(路徑穿越): 跳過
             if zi.is_dir():
                 os.makedirs(target, exist_ok=True)
             else:

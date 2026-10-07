@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from typing import List, Optional
 
-from PySide6.QtCore import Qt, QSize, QThread
+from PySide6.QtCore import Qt, QSize, QThread, QObject, Signal
 from PySide6.QtGui import QAction, QCursor
 from PySide6.QtWidgets import (
     QApplication, QFileDialog, QFormLayout, QGridLayout, QGroupBox, QHBoxLayout,
@@ -29,6 +29,29 @@ _STATUS_TEXT = {
 }
 
 
+class _ScanWorker(QObject):
+    """DLsite 掃描(解壓縮 + 走目錄 + 配對)的執行緒包裝。
+    解壓縮可能耗時很久的 7-ZIP 大檔,放到背景執行避免卡住(無回應)UI 執行緒,
+    並回報解壓失敗原因。"""
+    done = Signal(object)   # DlSiteScan(含 errors)
+    log = Signal(str)
+
+    def __init__(self, inputs: List[str], parent=None) -> None:
+        super().__init__(parent)
+        self.inputs = inputs
+
+    def run(self) -> None:
+        try:
+            scan = dlsite_mod.scan_dlsite(self.inputs)
+            for err in scan.errors:
+                self.log.emit(f"    ✘ {err}")
+        except Exception as e:  # noqa: BLE001
+            scan = dlsite_mod.DlSiteScan()
+            scan.errors.append(f"掃描失敗:{e}")
+            self.log.emit(f"    ✘ {scan.errors[-1]}")
+        self.done.emit(scan)
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -38,6 +61,8 @@ class MainWindow(QMainWindow):
         self.thread = None
         self.update_worker: UpdateWorker | None = None
         self.update_thread: Optional[QThread] = None
+        self.scan_worker: _ScanWorker | None = None
+        self.scan_thread: Optional[QThread] = None
         self._dlsite_trash_map: dict = {}
         self.setWindowTitle(f"WAV2FLAC 批次轉檔工具 v{__version__}")
         self.resize(1000, 680)
@@ -152,6 +177,14 @@ class MainWindow(QMainWindow):
         if getattr(self, "_mode_init", False):
             return
         self._apply_mode_visibility()
+        # 切換模式時清空上一模式的配對與清檔對照表, 避免沿用旧來源(如 DLsite
+        # 的 pair.output_dir 寫進商品資料夾、或殘留 trash_map 誤刪)直接按「開始」
+        self._clear_pairs()
+
+    def _clear_pairs(self) -> None:
+        self.pairs = []
+        self._dlsite_trash_map = {}
+        self._populate_table()
 
     def _apply_mode_visibility(self) -> None:
         dl = self.mode_dlsite.isChecked()
@@ -380,8 +413,28 @@ class MainWindow(QMainWindow):
         if not inputs:
             QMessageBox.warning(self, "WAV2FLAC", "請先加入 DLsite 商品最上層資料夾或壓縮檔。")
             return
-        self._append_log(f"▶ 掃描 DLsite:{len(inputs)} 個來源(僅限其下子資料夾)")
-        scan = dlsite_mod.scan_dlsite(inputs)
+        if self.scan_worker is not None:
+            QMessageBox.information(self, "WAV2FLAC", "掃描進行中,請稍候。")
+            return
+        self._append_log(f"▶ 掃描 DLsite:{len(inputs)} 個來源(僅限其下子資料夾,含解壓縮)")
+        self.scan_btn.setEnabled(False)
+        self.statusBar().showMessage("DLsite 掃描中...")
+        self.scan_worker = _ScanWorker(inputs)
+        self.scan_thread = QThread(self)
+        self.scan_worker.moveToThread(self.scan_thread)
+        self.scan_thread.started.connect(self.scan_worker.run)
+        self.scan_worker.log.connect(self._append_log)
+        self.scan_worker.done.connect(self._on_dlsite_scan_done)
+        self.scan_thread.start()
+
+    def _on_dlsite_scan_done(self, scan: dlsite_mod.DlSiteScan) -> None:
+        if self.scan_thread:
+            self.scan_thread.quit()
+            self.scan_thread.wait(30000)
+            self.scan_thread = None
+            self.scan_worker.deleteLater()
+            self.scan_worker = None
+        self.scan_btn.setEnabled(True)
         self._dlsite_scan = scan
 
         # 依商品最上層決定輸出子資料夾(商品/FLAC 或 商品/M4A)
@@ -572,6 +625,19 @@ class MainWindow(QMainWindow):
             self.worker.deleteLater()
             self.worker = None
         dlsite_mod.cleanup_cache()
+        # 若來源含壓縮檔暫存(已被 cleanup 清掉),再留著舊 pairs 按「開始」會全部找不到來源;
+        # 偵測到任一來源已不存在則清空並提示重掃(僅限 DLsite/壓縮檔情境)
+        if self.pairs:
+            alive = any(
+                (p.audio_path and os.path.isfile(p.audio_path))
+                or (p.subtitle_path and os.path.isfile(p.subtitle_path))
+                for p in self.pairs
+            )
+            if not alive:
+                self._append_log("    (來源壓縮檔暫存已清除,請重新掃描再轉檔)")
+                self.pairs = []
+                self._dlsite_trash_map = {}
+                self._populate_table()
         msg = f"完成:成功 {summary.success} 件、失敗 {summary.failed} 件、略過 {summary.skipped} 件"
         if summary.cancelled:
             msg += ",已取消"
@@ -587,15 +653,16 @@ class MainWindow(QMainWindow):
 
     # --------------------------------------------------------- 更新
     def _refresh_buttons(self) -> None:
-        """依「轉換中 / 更新中」實際狀態決定按鈕可用性,各結點統一呼叫,
+        """依「轉換中 / 更新中 / 掃描中」實際狀態決定按鈕可用性,各結點統一呼叫,
         避免某一分支(如更新完成)無條件覆蓋另一流程(如轉換中)的按鈕狀態。"""
         converting = self.worker is not None
         updating = self.update_worker is not None and getattr(self, "_updating", False)
+        scanning = self.scan_worker is not None
         busy = converting or updating
-        self.start_btn.setEnabled(not busy)
-        self.scan_btn.setEnabled(not busy)
-        self.cancel_btn.setEnabled(busy)
-        self.update_btn.setEnabled(not busy)
+        self.start_btn.setEnabled(not (busy or scanning))
+        self.scan_btn.setEnabled(not (busy or scanning))
+        self.cancel_btn.setEnabled(converting or updating)
+        self.update_btn.setEnabled(not (busy or scanning))
 
     def _set_updating(self, busy: bool, text: str = "") -> None:
         self._updating = busy
@@ -750,7 +817,7 @@ class MainWindow(QMainWindow):
             self.worker.request_cancel()
         if self.update_worker:
             self.update_worker.request_cancel()
-        for th in (self.thread, self.update_thread):
+        for th in (self.thread, self.update_thread, self.scan_thread):
             if not th:
                 continue
             th.quit()
