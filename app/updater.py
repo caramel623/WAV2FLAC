@@ -121,16 +121,24 @@ def _write_update_bat(new_dir: str, dest: str, tmp_dir: str, pid: int) -> str:
     bat = (
         "@echo off\r\n"
         ":wait\r\n"
-        f"tasklist /FI \"PID eq {pid}\" | find \"{pid}\" >nul\r\n"
-        "if not errorlevel 1 (\r\n"
+        f"tasklist /FI \"PID eq {pid}\" 2>nul | find /i \"info:\" >nul\r\n"
+        "if errorlevel 1 (\r\n"
         "  timeout /t 1 /nobreak >nul\r\n"
         "  goto wait\r\n"
         ")\r\n"
-        f'xcopy /E /Y /I /R "{new_dir}\\*" "{dest}"\r\n'
+        f'xcopy /E /Y /I /R "{new_dir}\\*" "{dest}" >nul\r\n'
+        "if errorlevel 1 (\r\n"
+        f'  echo _wav2flac update: xcopy failed &gt; "{tmp_dir}\\update_err.log"\r\n'
+        f'  start "" cmd /c "pause"\r\n'
+        "  goto :end\r\n"
+        ")\r\n"
         f'rmdir /S /Q "{tmp_dir}"\r\n'
         f'start "" "{dest}\\WAV2FLAC.exe"\r\n'
+        ":end\r\n"
+        "del \"%~f0\" >nul 2>&1\r\n"
     )
-    bat_path = os.path.join(tempfile.gettempdir(), "_wav2flac_update.bat")
+    # 唯一檔名(含 PID): 多實例更新不再互相覆蓋踩檔
+    bat_path = os.path.join(tempfile.gettempdir(), f"_wav2flac_update_{pid}.bat")
     # cmd.exe 批次檔以「ANSI 碼表」解析。路徑皆為 ASCII 時用系統 ANSI 編碼寫入即可;
     # 一旦含 CJK(如 C:\Users\某使用者\...), 用 UTF-8 寫並在開頭 `chcp 65001` 切碼表,
     # 才能正確讀到路徑(避免亂碼)。
@@ -249,6 +257,11 @@ class UpdateWorker(QObject):
                     if not chunk:
                         if now - last_data > self.STALL_SECS:
                             raise TimeoutError(f"下載停滯(超過 {int(self.STALL_SECS)} 秒沒有新資料)")
+                        # EOF: 若已知 Content-Length 但收的位元組不足 → 連線中斷, 截斷檔
+                        # 會一路走到解壓才報 BadZipFile, 在此先報出更明確原因
+                        if total and done != total:
+                            raise ConnectionError(
+                                f"下載 incomplete({done}/{total} bytes), 連線中斷")
                         break  # EOF
                     f.write(chunk)
                     done += len(chunk)
@@ -263,7 +276,7 @@ class UpdateWorker(QObject):
 
     @staticmethod
     def _cleanup_bat() -> None:
-        bat = os.path.join(tempfile.gettempdir(), "_wav2flac_update.bat")
+        bat = os.path.join(tempfile.gettempdir(), f"_wav2flac_update_{os.getpid()}.bat")
         try:
             if os.path.isfile(bat):
                 os.remove(bat)

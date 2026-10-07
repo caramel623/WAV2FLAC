@@ -190,13 +190,13 @@ def parse_subtitle(path: str) -> List[VttCue]:
 
 
 def format_lrc_time(ms: int) -> str:
-    # [mm:ss.cc] centiseconds
+    # [mm:ss.cc] centiseconds。LRC 慣例允許分鐘 >59(不取 %60 繞回),
+    # 超過 1 小時的音訊時間戳才正確(如 [65:00.00])。
     total_cs = int(round(ms / 10))
     cs = total_cs % 100
     total_s = total_cs // 100
     s = total_s % 60
     m = total_s // 60
-    m = m % 60
     return f"[{m:02d}:{s:02d}.{cs:02d}]"
 
 
