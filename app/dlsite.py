@@ -148,8 +148,18 @@ def _dedupe_roots(roots: List[str]) -> List[str]:
             norm.append(p)
     kept: List[str] = []
     for r in norm:
-        # 若 r 已在任何已保留根的底下, 則跳過
-        if any(os.path.commonpath([r, k]) == k for k in kept):
+        # 若 r 已在任何已保留根的底下, 則跳過。
+        # 注意 os.path.commonpath 跨磁碟(如 C:\a 與 D:\x)會拋 ValueError——
+        # 跨磁碟之間不可能有包含關係, 視為「無包含」而保留即可。
+        contained = False
+        for k in kept:
+            try:
+                if os.path.commonpath([r, k]) == k:
+                    contained = True
+                    break
+            except ValueError:
+                continue
+        if contained:
             continue
         kept.append(r)
     return kept
